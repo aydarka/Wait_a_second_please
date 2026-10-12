@@ -45,7 +45,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d89ab46b79da4fd45af177271a735d8b, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Projectile
-  speed: 10
+  speed: 20
   finalScaleMultiplier: 5
 --- !u!1001 &4182548604336770042
 PrefabInstance:
@@ -110,7 +110,7 @@ PrefabInstance:
     - target: {fileID: -7511558181221131132, guid: 9eeeeb2aa6bec6c4d80f63227735e7c8, type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
       value: 
-      objectReference: {fileID: 2100000, guid: 0457a589b68cc6c4e906e79c65d543ed, type: 2}
+      objectReference: {fileID: 2100000, guid: fa80d0aadd5bda941b6ba0084aaf1c3b, type: 2}
     - target: {fileID: 919132149155446097, guid: 9eeeeb2aa6bec6c4d80f63227735e7c8, type: 3}
       propertyPath: m_Name
       value: bullet
