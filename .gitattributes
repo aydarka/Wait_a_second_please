@@ -1,0 +1,2 @@
+# Exclude Unity materials from GitHub language statistics.
+*.mat linguist-detectable=false
