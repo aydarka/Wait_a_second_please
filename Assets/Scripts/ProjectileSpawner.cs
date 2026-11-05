@@ -1,16 +1,15 @@
 using UnityEngine;
 
+// The enemy's gun: launches a pooled bullet from the muzzle to where the player will be.
+// When to fire is decided by EnemyGunman.
 [DisallowMultipleComponent]
 public sealed class ProjectileSpawner : MonoBehaviour
 {
     [SerializeField] private Transform shootPoint;
     [SerializeField] private PrefabPool pool;
-    [SerializeField, Min(0f)] private float initialDelay = 3f;
-    [SerializeField, Min(0.01f)] private float shotInterval = 1f;
-    [SerializeField, Min(0)] private int maxShots = 3;
-    private float timeUntilShot;
-    private int shotsFired;
     private bool configurationValid;
+
+    public Transform ShootPoint => shootPoint;
 
     private void Awake()
     {
@@ -20,35 +19,28 @@ public sealed class ProjectileSpawner : MonoBehaviour
             Debug.LogError("ProjectileSpawner requires a ShootPoint and a pool with a Projectile prefab.", this);
     }
 
-    private void OnEnable()
+    // Offset shifts the aim point across the player's view in metres, for spread within a burst.
+    public bool Fire(Vector2 offset)
     {
-        shotsFired = 0;
-        timeUntilShot = Mathf.Max(0f, initialDelay);
-    }
-
-    private void LateUpdate()
-    {
-        if (!configurationValid || shotsFired >= maxShots) return;
-        timeUntilShot -= Time.deltaTime;
-        if (timeUntilShot > 0f) return;
-        // Preserve the interval without producing catch-up bursts after a long frame.
-        timeUntilShot = Mathf.Max(0f, timeUntilShot + Mathf.Max(0.01f, shotInterval));
+        if (!configurationValid) return false;
         var targetCamera = Camera.main;
-        if (targetCamera == null) return;
+        if (targetCamera == null) return false;
         Vector3 destination = targetCamera.transform.position;
         float zDistance = shootPoint.position.z - destination.z;
         // The player has already passed this firing point; there is no forward meeting.
-        if (zDistance <= 0f) return;
+        if (zDistance <= 0f) return false;
 
         float cameraSpeed = targetCamera.TryGetComponent<CameraMovement>(out var movement)
             ? movement.Speed : 0f;
         var bullet = pool.Rent(shootPoint.position, shootPoint.rotation);
-        if (bullet == null) return;
+        if (bullet == null) return false;
         var projectile = bullet.GetComponent<Projectile>();
         float duration = zDistance / (projectile.ZSpeed + cameraSpeed);
         destination.z += cameraSpeed * duration;
+        destination.x += offset.x;
+        destination.y += offset.y;
         projectile.Launch(destination, duration, pool);
         bullet.SetActive(true);
-        shotsFired++;
+        return true;
     }
 }
