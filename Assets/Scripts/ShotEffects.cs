@@ -14,6 +14,10 @@ public sealed class ShotEffects : MonoBehaviour
     private const float ReferenceScreenHeight = 1080f;
     // Tells sit this far towards the camera so the gun never cuts into them, metres.
     private const float TowardCamera = 0.15f;
+    // The aim glint shows once the barrel points within this many degrees of the player,
+    // or at this share of the warning at the latest.
+    private const float LevelledAngle = 2f;
+    private const float LateLevelProgress = 0.8f;
     private const float BoundsSize = 400f;
 
     private static readonly int ShotTimeId = Shader.PropertyToID("_ShotTime");
@@ -22,11 +26,21 @@ public sealed class ShotEffects : MonoBehaviour
 
     private static ShotEffects instance;
 
+    // Tells stay where they appeared: a mark riding the moving gun reads as a sticker, not a warning.
     private struct Flash
     {
-        public Transform Muzzle;
+        public Vector3 Position;
         public float Born;
         public int Seed;
+    }
+
+    // The raise from the waiting pose reads as lowering the gun, so the glint waits until it is levelled.
+    private sealed class AimGlint
+    {
+        public EnemyGunman Enemy;
+        public bool Levelled;
+        public Vector3 Anchor;
+        public float LevelProgress;
     }
 
     private Mesh ringMesh;
@@ -43,7 +57,7 @@ public sealed class ShotEffects : MonoBehaviour
     private readonly List<Color> inkColors = new List<Color>();
     private readonly List<int> inkTriangles = new List<int>();
     private readonly List<Vector2> starPoints = new List<Vector2>();
-    private readonly List<EnemyGunman> glints = new List<EnemyGunman>();
+    private readonly List<AimGlint> glints = new List<AimGlint>();
     private readonly List<Flash> flashes = new List<Flash>();
     private Color red = new Color(0.89f, 0.09f, 0.04f);
     private Color yellow = new Color(0.95f, 0.76f, 0.11f);
@@ -80,14 +94,16 @@ public sealed class ShotEffects : MonoBehaviour
     private static void OnAimStarted(EnemyGunman enemy, float warningSeconds)
     {
         var effects = Current;
-        if (effects != null && enemy != null && !effects.glints.Contains(enemy)) effects.glints.Add(enemy);
+        if (effects == null || enemy == null) return;
+        effects.glints.RemoveAll(glint => glint.Enemy == enemy);
+        effects.glints.Add(new AimGlint { Enemy = enemy });
     }
 
     private static void OnShotFired(EnemyGunman enemy)
     {
         var effects = Current;
         if (effects == null || enemy == null || enemy.Muzzle == null) return;
-        effects.flashes.Add(new Flash { Muzzle = enemy.Muzzle, Born = Time.time, Seed = Random.Range(0, int.MaxValue) });
+        effects.flashes.Add(new Flash { Position = enemy.Muzzle.position, Born = Time.time, Seed = Random.Range(0, int.MaxValue) });
     }
 
     private void Awake()
@@ -201,13 +217,13 @@ public sealed class ShotEffects : MonoBehaviour
     {
         for (int i = glints.Count - 1; i >= 0; i--)
         {
-            var enemy = glints[i];
+            var enemy = glints[i].Enemy;
             if (enemy == null || !enemy.isActiveAndEnabled || !enemy.IsAiming || enemy.Muzzle == null)
                 glints.RemoveAt(i);
         }
         for (int i = flashes.Count - 1; i >= 0; i--)
         {
-            if (flashes[i].Muzzle == null || Time.time - flashes[i].Born > FlashDuration)
+            if (Time.time - flashes[i].Born > FlashDuration)
                 flashes.RemoveAt(i);
         }
 
@@ -217,13 +233,31 @@ public sealed class ShotEffects : MonoBehaviour
         if (view != null)
         {
             float pixelAtOneMetre = 2f * Mathf.Tan(view.fieldOfView * 0.5f * Mathf.Deg2Rad) / ReferenceScreenHeight;
-            foreach (var enemy in glints) AddGlint(view.transform, enemy.Muzzle.position, enemy.AimProgress, pixelAtOneMetre);
-            foreach (var flash in flashes) AddFlash(view.transform, flash.Muzzle.position, flash.Seed, pixelAtOneMetre);
+            foreach (var glint in glints)
+            {
+                if (!glint.Levelled) TryLevel(glint, view.transform.position);
+                if (!glint.Levelled) continue;
+                float closing = Mathf.InverseLerp(glint.LevelProgress, 1f, glint.Enemy.AimProgress);
+                AddGlint(view.transform, glint.Anchor, closing, pixelAtOneMetre);
+            }
+            foreach (var flash in flashes) AddFlash(view.transform, flash.Position, flash.Seed, pixelAtOneMetre);
         }
         inkMesh.Clear();
         inkMesh.SetVertices(inkVertices);
         inkMesh.SetColors(inkColors);
         inkMesh.SetTriangles(inkTriangles, 0);
+    }
+
+    // Pins the glint where the muzzle is once the barrel lines up with the player.
+    private static void TryLevel(AimGlint glint, Vector3 viewer)
+    {
+        Transform muzzle = glint.Enemy.Muzzle;
+        float progress = glint.Enemy.AimProgress;
+        Vector3 barrel = muzzle.parent != null ? muzzle.position - muzzle.parent.position : muzzle.forward;
+        if (progress < LateLevelProgress && Vector3.Angle(barrel, viewer - muzzle.position) > LevelledAngle) return;
+        glint.Levelled = true;
+        glint.Anchor = muzzle.position;
+        glint.LevelProgress = Mathf.Min(progress, 0.99f);
     }
 
     // Sizes are in metres but never drop below a size in pixels, so a distant tell stays readable.

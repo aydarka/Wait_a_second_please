@@ -17,6 +17,8 @@ public class Projectile : MonoBehaviour
     private float ringSpacing = 0.35f;
     [SerializeField, Tooltip("Smallest and largest ring radius at launch size, metres; rings grow with the bullet.")]
     private Vector2 ringRadius = new Vector2(0.03f, 0.065f);
+    [SerializeField, Min(1f), Tooltip("Rings grow with the bullet up to this many times their launch size.")]
+    private float ringMaxGrowth = 2.5f;
     [SerializeField, Min(0.1f), Tooltip("Flight distance of one small-to-large wave of ring sizes, metres.")]
     private float ringWaveLength = 1.7f;
     [SerializeField, Min(0f), Tooltip("Ring line width at launch size, metres; the shader keeps a minimum in pixels.")]
@@ -131,7 +133,9 @@ public class Projectile : MonoBehaviour
             nextRingDistance += ringSpacing;
             if (strength < minRingStrength) continue;
 
-            float growth = Mathf.Lerp(1f, maxScale, meetingDistance > 0f ? Mathf.Clamp01(distance / meetingDistance) : 1f);
+            // Rings follow the bullet's growth only part of the way, so next to the player they stay small.
+            float growth = Mathf.Min(ringMaxGrowth,
+                Mathf.Lerp(1f, maxScale, meetingDistance > 0f ? Mathf.Clamp01(distance / meetingDistance) : 1f));
             // Sizes follow a wave along the path, like the rings around Neo's bullets, not the distance to the gun.
             float wave = 0.5f + 0.5f * Mathf.Sin(distance * 2f * Mathf.PI / ringWaveLength);
             float radius = Mathf.Lerp(ringRadius.x, ringRadius.y, wave) * growth * Random.Range(0.9f, 1.1f);
