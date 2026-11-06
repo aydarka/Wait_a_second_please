@@ -49,8 +49,12 @@ public sealed class EnemyGunman : MonoBehaviour
     private float engageDistance = 38f;
     [SerializeField, Min(0f), Tooltip("Never starts showing itself closer than this, metres.")]
     private float minFireDistance = 15f;
-    [SerializeField, Range(0f, 0.5f), Tooltip("Margin inside the screen edges the shooting position must be in.")]
+    [SerializeField, Range(0f, 0.5f), Tooltip("Margin inside the screen edges the whole figure must keep while it is out.")]
     private float viewMargin = 0.03f;
+    [SerializeField, Min(0f), Tooltip("Half the figure's width with the gun, metres, for the on-screen check.")]
+    private float figureHalfWidth = 0.5f;
+    [SerializeField, Min(0f), Tooltip("Height of the hat top above the feet, metres, for the on-screen check.")]
+    private float figureHeight = 2.1f;
     [SerializeField, Min(1)] private int maxSimultaneousShooters = 2;
 
     [Header("Rhythm, game seconds")]
@@ -82,6 +86,7 @@ public sealed class EnemyGunman : MonoBehaviour
     private static int engagedShooters;
 
     private Transform target;
+    private CameraMovement runner;
     private Transform muzzle;
     private Transform gunBody;
     private Renderer[] bodyRenderers;
@@ -254,6 +259,7 @@ public sealed class EnemyGunman : MonoBehaviour
         burstsFired = 0;
         var mainCamera = Camera.main;
         target = mainCamera != null ? mainCamera.transform : null;
+        runner = target != null ? target.GetComponent<CameraMovement>() : null;
         if (!configurationValid) return;
         ApplyFloorClip();
         transform.position = hiddenPosition;
@@ -356,8 +362,9 @@ public sealed class EnemyGunman : MonoBehaviour
     {
         while (shotsLeft > 0 && stateTimer <= 0f)
         {
-            // Something moved into the way (or the spot shoots into its own cover): no bullet through walls.
-            if (!LineOfFireClear(muzzle.position, target.position))
+            // Something moved into the way (or the spot shoots into its own cover): no bullet through walls,
+            // and none from beyond the screen edge.
+            if (!LineOfFireClear(muzzle.position, target.position) || !MuzzleOnScreen())
             {
                 shotsLeft = 0;
                 break;
@@ -390,11 +397,41 @@ public sealed class EnemyGunman : MonoBehaviour
         if (toTarget.z >= 0f || distance > engageDistance || distance < minFireDistance) return false;
         var mainCamera = Camera.main;
         if (mainCamera == null) return false;
-        Vector3 viewport = mainCamera.WorldToViewportPoint(shootFrom);
-        bool inView = viewport.z > 0f &&
-            viewport.x >= viewMargin && viewport.x <= 1f - viewMargin &&
-            viewport.y >= viewMargin && viewport.y <= 1f - viewMargin;
-        return inView && LineOfFireClear(shootFrom, target.position);
+        return StaysInFrame(mainCamera) && LineOfFireClear(shootFrom, target.position);
+    }
+
+    // The whole figure must be on screen when it steps out and still be there when it is back in cover,
+    // although the player keeps running towards it meanwhile; a narrow portrait view makes this matter.
+    private bool StaysInFrame(Camera view)
+    {
+        float shownFor = ExposeDuration + aimDuration + holdAfterShot + ExposeDuration;
+        Vector3 cameraTravel = Vector3.forward * ((runner != null ? runner.Speed : 0f) * shownFor);
+        Vector3 across = view.transform.right * figureHalfWidth;
+        Vector3 chest = exposedPosition + Vector3.up * exposedMuzzleHeight;
+        Vector3 top = exposedPosition + Vector3.up * figureHeight;
+        // Moving the figure back by the camera's travel is the same as moving the camera forward.
+        for (int moment = 0; moment < 2; moment++)
+        {
+            Vector3 shift = moment == 0 ? Vector3.zero : -cameraTravel;
+            if (!InFrame(view, chest - across + shift, viewMargin) || !InFrame(view, chest + across + shift, viewMargin) ||
+                !InFrame(view, top + shift, viewMargin))
+                return false;
+        }
+        return true;
+    }
+
+    private bool MuzzleOnScreen()
+    {
+        var view = Camera.main;
+        return view == null || InFrame(view, muzzle.position, 0f);
+    }
+
+    private static bool InFrame(Camera view, Vector3 point, float margin)
+    {
+        Vector3 viewport = view.WorldToViewportPoint(point);
+        return viewport.z > 0f &&
+            viewport.x >= margin && viewport.x <= 1f - margin &&
+            viewport.y >= margin && viewport.y <= 1f - margin;
     }
 
     private bool LineOfFireClear(Vector3 from, Vector3 to)
