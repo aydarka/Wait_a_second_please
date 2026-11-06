@@ -45,14 +45,16 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d89ab46b79da4fd45af177271a735d8b, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Projectile
-  speed: 50
+  speed: 70
   finalScaleMultiplier: 5
   hitRadius: 0.35
+  closeDistance: 0.6
+  dodgeFrame: {x: 25, y: 30}
   flyByDistance: 6
   rings:
     spacing: 0.35
     radius: {x: 0.03, y: 0.065}
-    maxGrowth: 2.5
+    maxGrowth: 2
     waveLength: 1.7
     lineWidth: 0.004
     lifetime: 0.7

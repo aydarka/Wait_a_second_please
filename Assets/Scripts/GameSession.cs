@@ -12,8 +12,6 @@ public sealed class GameSession : MonoBehaviour
     [SerializeField] private string deathMessage = "TOO LATE";
     [SerializeField, Min(0f), Tooltip("Real-time seconds the title stays on screen.")]
     private float titleDuration = 3f;
-    [SerializeField, Min(0f), Tooltip("Misses closer than this, in metres, are a close one: the message flashes and the player fires back.")]
-    private float closeDistance = 0.6f;
     [SerializeField, Min(0f), Tooltip("Real-time seconds before a tap restarts the run.")]
     private float restartDelay = 1.2f;
 
@@ -58,12 +56,13 @@ public sealed class GameSession : MonoBehaviour
         if (instance != null && !instance.isOver) instance.EndRun(shooter);
     }
 
-    // True for a close one: the message flashes and the player fires back at the shooter.
-    public static bool ReportDodge(float missDistance)
+    // Counts a dodged shot. A close one (the bullet decides) flashes the message and returns true,
+    // so the player fires back at the shooter.
+    public static bool ReportDodge(bool close)
     {
         if (instance == null || instance.isOver) return false;
         instance.dodged++;
-        if (missDistance > instance.closeDistance) return false;
+        if (!close) return false;
         instance.nearMissTime = Time.unscaledTime;
         return true;
     }

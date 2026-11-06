@@ -45,10 +45,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1c4a4d738a703284e95f491b18e843fb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CounterShot
-  speed: 20
+  speed: 50
   hipOnScreen: {x: 0.78, y: 0.12}
   hipDepth: 0.6
-  flashRadius: 0.03
+  flashRadius: 0.16
   launchScale: 2.5
   rings:
     spacing: 0.35

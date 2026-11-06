@@ -28,12 +28,19 @@ public sealed class ShotEffects : MonoBehaviour
     private static ShotEffects instance;
 
     // Tells stay where they appeared: a mark riding the moving gun reads as a sticker, not a warning.
+    // The player's own flash is the exception: it rides the camera, which runs on through it otherwise.
     private struct Flash
     {
-        public Vector3 Position;
+        public Vector3 Position;   // world space, or the camera's space when Anchor is set
+        public Transform Anchor;
         public float Radius;
         public float Born;
+        public float Duration;
+        public bool RealTime;
         public int Seed;
+
+        public float Age => (RealTime ? Time.unscaledTime : Time.time) - Born;
+        public Vector3 WorldPosition => Anchor != null ? Anchor.TransformPoint(Position) : Position;
     }
 
     // The raise from the waiting pose reads as lowering the gun, so the glint waits until it is levelled.
@@ -121,19 +128,24 @@ public sealed class ShotEffects : MonoBehaviour
     {
         var effects = Current;
         if (effects == null || enemy == null || enemy.Muzzle == null) return;
-        effects.AddFlash(enemy.Muzzle.position, EnemyFlashRadius);
+        effects.flashes.Add(new Flash
+        {
+            Position = enemy.Muzzle.position, Radius = EnemyFlashRadius,
+            Born = Time.time, Duration = FlashDuration, Seed = Random.Range(0, int.MaxValue)
+        });
     }
 
-    // A muzzle flash with the given radius in metres, never smaller than a size in pixels.
-    public static void MuzzleFlash(Vector3 position, float radius)
+    // The player's muzzle flash: held in view for a stretch of real time, because his shot sets time
+    // running at full speed at once and the camera would pass a flash left in the street.
+    public static void PlayerFlash(Camera view, Vector3 position, float radius, float realSeconds)
     {
         var effects = Current;
-        if (effects != null) effects.AddFlash(position, radius);
-    }
-
-    private void AddFlash(Vector3 position, float radius)
-    {
-        flashes.Add(new Flash { Position = position, Radius = radius, Born = Time.time, Seed = Random.Range(0, int.MaxValue) });
+        if (effects == null || view == null) return;
+        effects.flashes.Add(new Flash
+        {
+            Position = view.transform.InverseTransformPoint(position), Anchor = view.transform, Radius = radius,
+            Born = Time.unscaledTime, Duration = realSeconds, RealTime = true, Seed = Random.Range(0, int.MaxValue)
+        });
     }
 
     // The game clock stands still on the death screen, so the shooter walks on real time: his own side
@@ -323,7 +335,7 @@ public sealed class ShotEffects : MonoBehaviour
         }
         for (int i = flashes.Count - 1; i >= 0; i--)
         {
-            if (Time.time - flashes[i].Born > FlashDuration)
+            if (flashes[i].Age > flashes[i].Duration)
                 flashes.RemoveAt(i);
         }
 
@@ -382,7 +394,7 @@ public sealed class ShotEffects : MonoBehaviour
     // A flat jagged star with a black edge; every shot gets its own rays.
     private void DrawFlash(Transform view, Flash flash, float pixelAtOneMetre)
     {
-        Vector3 centre = TowardViewer(view, flash.Position, pixelAtOneMetre, out float pixel);
+        Vector3 centre = TowardViewer(view, flash.WorldPosition, pixelAtOneMetre, out float pixel);
         float outer = Mathf.Max(flash.Radius, 26f * pixel);
         var random = new System.Random(flash.Seed);
         const int points = 16;
