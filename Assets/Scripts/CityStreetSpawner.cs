@@ -33,6 +33,8 @@ public sealed class CityStreetSpawner : MonoBehaviour
     [SerializeField, Min(0f)] private float pavementHeight = 0.15f;
     [SerializeField, Min(0f), Tooltip("Cover never reaches closer than this to the middle of the road, metres.")]
     private float clearLane = 2.5f;
+    [SerializeField, Tooltip("Layer of everything that stops a bullet; enemies line-cast against it before shooting.")]
+    private string coverLayerName = "StreetCover";
 
     [Header("Buildings")]
     [SerializeField] private Vector2 buildingHeight = new Vector2(10f, 30f);
@@ -52,6 +54,16 @@ public sealed class CityStreetSpawner : MonoBehaviour
     [SerializeField, Range(0f, 1f)] private float parkedCarChance = 0.45f;
     [SerializeField, Range(0f, 1f), Tooltip("Share of cars left at an angle instead of parked along the kerb.")]
     private float abandonedCarShare = 0.25f;
+    [SerializeField, Tooltip("Middle of the hood (x) and of the boot (y) along the car, metres from its middle.")]
+    private Vector2 carHoodAndBootCentre = new Vector2(1.4f, -1.8f);
+    [SerializeField, Tooltip("Top of the hood (x) and of the boot (y) above the road, metres.")]
+    private Vector2 carHoodAndBootHeight = new Vector2(1.11f, 0.96f);
+    [SerializeField, Tooltip("Length of the hood (x) and of the boot (y); the cabin fills the rest.")]
+    private Vector2 carHoodAndBootLength = new Vector2(1.6f, 0.8f);
+    [SerializeField, Tooltip("Angle of an abandoned car to the street (min, max), degrees; near 90 shows its side to the player.")]
+    private Vector2 abandonedCarAngle = new Vector2(60f, 80f);
+    [SerializeField, Min(0f), Tooltip("Sideways step from behind a car parked along the kerb out to a clear line of fire.")]
+    private float carEdgeStep = 1.4f;
     [SerializeField, Range(0f, 1f)] private float barrierChance = 0.2f;
     [SerializeField, Range(0f, 1f)] private float doorChance = 0.35f;
     [SerializeField, Range(0f, 1f)] private float balconyChance = 0.4f;
@@ -80,6 +92,7 @@ public sealed class CityStreetSpawner : MonoBehaviour
         public int UsedSpots;
     }
 
+    private readonly List<BoxCollider> colliderBuffer = new List<BoxCollider>();
     private readonly Queue<Segment> activeSegments = new Queue<Segment>();
     private readonly Stack<Segment> spareSegments = new Stack<Segment>();
     private Mesh cubeMesh;
@@ -87,6 +100,7 @@ public sealed class CityStreetSpawner : MonoBehaviour
     private Vector3 carCentre;
     private Vector3 carHalfSize;
     private Transform backlight;
+    private int coverLayer;
     private float nextSegmentZ;
     private int segmentIndex;
     private bool configurationValid;
@@ -104,6 +118,12 @@ public sealed class CityStreetSpawner : MonoBehaviour
         }
         cubeMesh = BorrowPrimitiveMesh(PrimitiveType.Cube);
         quadMesh = BorrowPrimitiveMesh(PrimitiveType.Quad);
+        coverLayer = LayerMask.NameToLayer(coverLayerName);
+        if (coverLayer < 0)
+        {
+            Debug.LogWarning("CityStreetSpawner: layer '" + coverLayerName + "' is missing; cover colliders stay on Default.", this);
+            coverLayer = 0;
+        }
         if (carMesh != null)
         {
             // The car model's pivot is off its middle; placement works from the mesh bounds instead.
@@ -221,7 +241,7 @@ public sealed class CityStreetSpawner : MonoBehaviour
             float depth = Random.Range(buildingDepth.x, buildingDepth.y);
             float height = Random.Range(buildingHeight.x, buildingHeight.y);
             float inner = frontX + Random.Range(10f, 16f);
-            Cube(segment, buildingMaterial, new Vector3(side * (inner + depth * 0.5f), height * 0.5f, z0 + segmentLength * 0.5f),
+            Solid(segment, buildingMaterial, new Vector3(side * (inner + depth * 0.5f), height * 0.5f, z0 + segmentLength * 0.5f),
                 new Vector3(depth, height, segmentLength));
             return false;
         }
@@ -235,14 +255,14 @@ public sealed class CityStreetSpawner : MonoBehaviour
             float height = Random.Range(buildingHeight.x, buildingHeight.y);
             float inner = frontX + Random.Range(0f, 0.6f);
             float zCentre = cursor + length * 0.5f;
-            Cube(segment, buildingMaterial, new Vector3(side * (inner + depth * 0.5f), height * 0.5f, zCentre),
+            Solid(segment, buildingMaterial, new Vector3(side * (inner + depth * 0.5f), height * 0.5f, zCentre),
                 new Vector3(depth, height, length));
 
             if (Random.value < setbackChance)
             {
                 float inset = Random.Range(1.5f, 3f);
                 float extra = Random.Range(4f, 12f);
-                Cube(segment, buildingMaterial, new Vector3(side * (inner + inset + (depth - inset) * 0.5f), height + extra * 0.5f, zCentre),
+                Solid(segment, buildingMaterial, new Vector3(side * (inner + inset + (depth - inset) * 0.5f), height + extra * 0.5f, zCentre),
                     new Vector3(depth - inset, extra, Mathf.Max(2f, length - inset)));
             }
 
@@ -278,7 +298,7 @@ public sealed class CityStreetSpawner : MonoBehaviour
             Cube(segment, propMaterial, new Vector3(side * (facadeX - platformDepth + 0.03f), y + 1f, zCentre),
                 new Vector3(0.05f, 0.05f, platformLength));
             // An open perch: the rail is no cover, but an enemy up here is framed by the lattice.
-            if (k < 2) Spot(segment, new Vector3(platformX, y + 0.04f, zCentre + (k == 0 ? 0.9f : -0.9f)));
+            if (k < 2) Spot(segment, new Vector3(platformX, y + 0.04f, zCentre + (k == 0 ? 0.9f : -0.9f)), EnemyCover.None, Vector3.zero, 0f);
             if (k == floors - 1) continue;
             float slope = k % 2 == 0 ? ladderAngle : -ladderAngle;
             Cube(segment, propMaterial, new Vector3(platformX, y + floorHeight * 0.5f, zCentre),
@@ -297,14 +317,15 @@ public sealed class CityStreetSpawner : MonoBehaviour
         // The slab sits just under a window row so the parapet top meets the sill.
         float slabTop = firstFloor + floor * floorHeight + 0.65f;
         float x = side * (facadeX - depth * 0.5f);
-        Cube(segment, propMaterial, new Vector3(x, slabTop - 0.08f, z), new Vector3(depth, 0.16f, length));
-        Cube(segment, propMaterial, new Vector3(side * (facadeX - depth + 0.06f), slabTop + parapet * 0.5f, z),
+        Solid(segment, propMaterial, new Vector3(x, slabTop - 0.08f, z), new Vector3(depth, 0.16f, length));
+        Solid(segment, propMaterial, new Vector3(side * (facadeX - depth + 0.06f), slabTop + parapet * 0.5f, z),
             new Vector3(0.12f, parapet, length));
         for (int end = -1; end <= 1; end += 2)
-            Cube(segment, propMaterial, new Vector3(x, slabTop + parapet * 0.5f, z + end * (length * 0.5f - 0.06f)),
+            Solid(segment, propMaterial, new Vector3(x, slabTop + parapet * 0.5f, z + end * (length * 0.5f - 0.06f)),
                 new Vector3(depth, parapet, 0.12f));
         Cube(segment, lightPanelMaterial, new Vector3(side * (facadeX - 0.02f), slabTop + 1.1f, z), new Vector3(0.04f, 2.2f, 1.3f));
-        Spot(segment, new Vector3(side * (facadeX - depth * 0.45f), slabTop, z));
+        // Close behind the end parapet that faces the player, so the line of fire down to the street clears it.
+        Spot(segment, new Vector3(x, slabTop, z - length * 0.5f + 0.5f), EnemyCover.Low, Vector3.zero, parapet);
     }
 
     // A doorway niche between two piers, lit from inside; the enemy waits in the shadow of the nearer pier.
@@ -316,12 +337,14 @@ public sealed class CityStreetSpawner : MonoBehaviour
         const float doorHeight = 2.4f;
         float pierX = side * (facadeX - pierDepth * 0.5f);
         for (int end = -1; end <= 1; end += 2)
-            Cube(segment, propMaterial, new Vector3(pierX, (doorHeight + 0.35f) * 0.5f, z + end * (opening + pierWidth) * 0.5f),
+            Solid(segment, propMaterial, new Vector3(pierX, (doorHeight + 0.35f) * 0.5f, z + end * (opening + pierWidth) * 0.5f),
                 new Vector3(pierDepth, doorHeight + 0.35f, pierWidth));
-        Cube(segment, propMaterial, new Vector3(pierX, doorHeight + 0.175f, z), new Vector3(pierDepth, 0.35f, opening));
+        Solid(segment, propMaterial, new Vector3(pierX, doorHeight + 0.175f, z), new Vector3(pierDepth, 0.35f, opening));
         Cube(segment, lightPanelMaterial, new Vector3(side * (facadeX - 0.02f), doorHeight * 0.5f + pavementHeight, z),
             new Vector3(0.04f, doorHeight - pavementHeight, opening));
-        Spot(segment, new Vector3(side * (facadeX - 0.3f), pavementHeight, z - opening * 0.25f));
+        // Steps out past the pier fronts towards the road to shoot.
+        Spot(segment, new Vector3(side * (facadeX - 0.3f), pavementHeight, z - opening * 0.25f),
+            EnemyCover.Edge, new Vector3(-side * pierDepth, 0f, 0f), 0f);
     }
 
     private void LayoutBridge(Segment segment, float z, float frontX)
@@ -330,11 +353,13 @@ public sealed class CityStreetSpawner : MonoBehaviour
         const float deckThickness = 1.3f;
         float y = Random.Range(8f, 13f);
         float span = frontX * 2f + 2f;
-        Cube(segment, buildingMaterial, new Vector3(0f, y, z), new Vector3(span, deckThickness, deckDepth));
+        Solid(segment, buildingMaterial, new Vector3(0f, y, z), new Vector3(span, deckThickness, deckDepth));
         float deckTop = y + deckThickness * 0.5f;
         for (int end = -1; end <= 1; end += 2)
-            Cube(segment, propMaterial, new Vector3(0f, deckTop + 0.5f, z + end * (deckDepth * 0.5f - 0.08f)), new Vector3(span, 1f, 0.16f));
-        Spot(segment, new Vector3(Random.Range(-frontX + 1f, frontX - 1f), deckTop, z + 0.4f));
+            Solid(segment, propMaterial, new Vector3(0f, deckTop + 0.5f, z + end * (deckDepth * 0.5f - 0.08f)), new Vector3(span, 1f, 0.16f));
+        // Just behind the parapet on the player's side: from 8-13 m up, a spot deeper on the deck could not shoot over it.
+        Spot(segment, new Vector3(Random.Range(-frontX + 1f, frontX - 1f), deckTop, z - deckDepth * 0.5f + 0.55f),
+            EnemyCover.Low, Vector3.zero, 1f);
     }
 
     // Cars and barriers along the kerb on one side of the road, never inside the player's lane.
@@ -345,28 +370,41 @@ public sealed class CityStreetSpawner : MonoBehaviour
         {
             if (Random.value < abandonedCarShare)
             {
-                // Left at an angle, nose to the kerb: seen side-on, so the hood is low cover.
-                float angle = Random.Range(25f, 40f);
+                // Left across the shoulder, nose to the kerb: seen side-on, so the hood or the boot is low cover.
+                float angle = Random.Range(abandonedCarAngle.x, abandonedCarAngle.y);
                 float yaw = side * angle + (Random.value < 0.5f ? 0f : 180f);
                 float reach = carHalfSize.z * Mathf.Sin(angle * Mathf.Deg2Rad) + carHalfSize.x * Mathf.Cos(angle * Mathf.Deg2Rad);
                 float x = side * Mathf.Max(clearLane + reach, roadHalfWidth - reach * 0.6f);
-                Car(segment, new Vector3(x, 0f, z), yaw);
-                Spot(segment, new Vector3(x + side * 0.4f, 0f, z + carHalfSize.z * 0.55f + 1.1f));
+                var groundCentre = new Vector3(x, 0f, z);
+                Car(segment, groundCentre, yaw);
+                // Crouch behind the end nearer the middle of the road: the line of fire to the player drifts
+                // that way, so the cabin stays out of it and the barrel at 1.25 m clears the hood or boot.
+                Quaternion rotation = Quaternion.Euler(0f, yaw, 0f);
+                Vector3 hoodOffset = rotation * new Vector3(0f, 0f, carHoodAndBootCentre.x);
+                Vector3 bootOffset = rotation * new Vector3(0f, 0f, carHoodAndBootCentre.y);
+                bool behindHood = Mathf.Abs(x + hoodOffset.x) < Mathf.Abs(x + bootOffset.x);
+                Vector3 alongEnd = behindHood ? hoodOffset : bootOffset;
+                Vector3 farSide = rotation * Vector3.right;
+                if (farSide.z < 0f) farSide = -farSide;
+                Vector3 feet = groundCentre + alongEnd + farSide * (carHalfSize.x + 0.45f);
+                Spot(segment, new Vector3(feet.x, 0f, feet.z), EnemyCover.Low, Vector3.zero,
+                    behindHood ? carHoodAndBootHeight.x : carHoodAndBootHeight.y);
             }
             else
             {
-                // Parked along the kerb: seen end-on, the cabin hides a standing enemy, who leans out to the road side.
+                // Parked along the kerb: seen end-on, the cabin hides a standing enemy, who steps out to the road side.
                 float x = side * (roadHalfWidth - 0.2f - carHalfSize.x);
                 Car(segment, new Vector3(x, 0f, z), Random.value < 0.5f ? 0f : 180f);
-                Spot(segment, new Vector3(x + side * 0.2f, 0f, z + carHalfSize.z + 0.45f));
+                Spot(segment, new Vector3(x + side * 0.2f, 0f, z + carHalfSize.z + 0.45f),
+                    EnemyCover.Edge, new Vector3(-side * carEdgeStep, 0f, 0f), 0f);
             }
         }
         else if (Random.value < barrierChance)
         {
             // A concrete block across the shoulder, square to the player: low cover.
             float x = side * (clearLane + 1.2f);
-            Cube(segment, propMaterial, new Vector3(x, 0.45f, z), new Vector3(2f, 0.9f, 0.6f));
-            Spot(segment, new Vector3(x, 0f, z + 0.75f));
+            Solid(segment, propMaterial, new Vector3(x, 0.45f, z), new Vector3(2f, 0.9f, 0.6f));
+            Spot(segment, new Vector3(x, 0f, z + 0.75f), EnemyCover.Low, Vector3.zero, 0.9f);
         }
     }
 
@@ -392,7 +430,7 @@ public sealed class CityStreetSpawner : MonoBehaviour
         // Put the middle of the body on groundCentre and the wheels on the road.
         Vector3 offset = rotation * new Vector3(-carCentre.x, 0f, -carCentre.z);
         offset.y = carHalfSize.y - carCentre.y;
-        Place(segment, carMesh, carMaterial, groundCentre + offset, rotation, Vector3.one);
+        Place(segment, carMesh, carMaterial, groundCentre + offset, rotation, Vector3.one, true);
     }
 
     private void Cube(Segment segment, Material material, Vector3 position, Vector3 scale)
@@ -402,15 +440,21 @@ public sealed class CityStreetSpawner : MonoBehaviour
 
     private void Cube(Segment segment, Material material, Vector3 position, Vector3 scale, Quaternion rotation)
     {
-        Place(segment, cubeMesh, material, position, rotation, scale);
+        Place(segment, cubeMesh, material, position, rotation, scale, false);
+    }
+
+    // A cube that stops bullets and blocks the enemies' line of fire.
+    private void Solid(Segment segment, Material material, Vector3 position, Vector3 scale)
+    {
+        Place(segment, cubeMesh, material, position, Quaternion.identity, scale, true);
     }
 
     private void Quad(Segment segment, Vector3 position, Vector2 size)
     {
-        Place(segment, quadMesh, lightPoolMaterial, position, Quaternion.Euler(90f, 0f, 0f), new Vector3(size.x, size.y, 1f));
+        Place(segment, quadMesh, lightPoolMaterial, position, Quaternion.Euler(90f, 0f, 0f), new Vector3(size.x, size.y, 1f), false);
     }
 
-    private void Spot(Segment segment, Vector3 feet)
+    private void Spot(Segment segment, Vector3 feet, EnemyCover cover, Vector3 offsetToExposed, float coverHeight)
     {
         EnemySpot spot;
         if (segment.UsedSpots < segment.Spots.Count)
@@ -425,12 +469,13 @@ public sealed class CityStreetSpawner : MonoBehaviour
         }
         segment.UsedSpots++;
         spot.transform.position = feet;
+        spot.SetCover(cover, offsetToExposed, coverHeight);
         // Re-enabling re-registers the spot and frees it for a new enemy.
         spot.gameObject.SetActive(false);
         spot.gameObject.SetActive(true);
     }
 
-    private void Place(Segment segment, Mesh mesh, Material material, Vector3 position, Quaternion rotation, Vector3 scale)
+    private void Place(Segment segment, Mesh mesh, Material material, Vector3 position, Quaternion rotation, Vector3 scale, bool solid)
     {
         Transform piece;
         if (segment.Used < segment.Pieces.Count)
@@ -448,6 +493,45 @@ public sealed class CityStreetSpawner : MonoBehaviour
         piece.gameObject.SetActive(true);
         piece.SetPositionAndRotation(position, rotation);
         piece.localScale = scale;
+
+        // Pieces swap roles between layouts, so the colliders follow whatever mesh the piece shows now.
+        piece.GetComponents(colliderBuffer);
+        int needed = !solid ? 0 : mesh == carMesh ? 3 : 1;
+        while (colliderBuffer.Count < needed)
+            colliderBuffer.Add(piece.gameObject.AddComponent<BoxCollider>());
+        for (int i = 0; i < colliderBuffer.Count; i++)
+            colliderBuffer[i].enabled = i < needed;
+        if (needed == 1)
+        {
+            colliderBuffer[0].center = mesh.bounds.center;
+            colliderBuffer[0].size = mesh.bounds.size;
+        }
+        else if (needed == 3)
+        {
+            FitCarColliders(colliderBuffer);
+        }
+        piece.gameObject.layer = solid ? coverLayer : 0;
+    }
+
+    // The car's bounding box would block everything under the cabin roof, hiding a barrel raised over the hood.
+    // Three boxes follow the profile instead: hood, cabin, boot, each a little under the real top.
+    private void FitCarColliders(List<BoxCollider> boxes)
+    {
+        const float margin = 0.03f;
+        float floor = carCentre.y - carHalfSize.y;
+        float width = carHalfSize.x * 2f;
+        float hoodStart = carHoodAndBootCentre.x - carHoodAndBootLength.x * 0.5f;
+        float bootEnd = carHoodAndBootCentre.y + carHoodAndBootLength.y * 0.5f;
+        float cabinHeight = carHalfSize.y * 2f;
+        SetBox(boxes[0], carHoodAndBootCentre.x, carHoodAndBootLength.x, carHoodAndBootHeight.x - margin, floor, width);
+        SetBox(boxes[1], (hoodStart + bootEnd) * 0.5f, hoodStart - bootEnd, cabinHeight - margin, floor, width);
+        SetBox(boxes[2], carHoodAndBootCentre.y, carHoodAndBootLength.y, carHoodAndBootHeight.y - margin, floor, width);
+    }
+
+    private void SetBox(BoxCollider box, float alongCentre, float length, float height, float floor, float width)
+    {
+        box.center = new Vector3(carCentre.x, floor + height * 0.5f, carCentre.z + alongCentre);
+        box.size = new Vector3(width, height, length);
     }
 
     private static GameObject CreatePiece(Transform parent, Mesh mesh, Material material)
