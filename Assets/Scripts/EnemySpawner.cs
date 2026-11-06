@@ -71,7 +71,10 @@ public sealed class EnemySpawner : MonoBehaviour
         if (enemy == null) return;
         enemy.GetComponent<ReturnToPoolBehindPlayer>().Initialize(player, pool);
         if (enemy.TryGetComponent<EnemyGunman>(out var gunman))
+        {
+            gunman.AssignSpot(spot);
             gunman.ShowTemporaryLedge(onLedge);
+        }
         if (spot != null) spot.Occupant = enemy;
         enemy.SetActive(true);
     }

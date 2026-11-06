@@ -1,9 +1,11 @@
 using System;
 using UnityEngine;
 
-// Gangster behaviour in game time, posed like comic panels: waits with the barrel up over the shoulder,
-// turns and levels the gun at the player as the warning, fires a short burst with recoil, lowers it again.
-// Poses are bone rotations derived from the prefab's aiming pose; there are no animation clips.
+// Gangster behaviour in game time, posed like comic panels. The enemy hides at its EnemySpot,
+// shows itself (stands up from a crouch behind low cover or side-steps out from an edge), levels the gun
+// at the player as the warning, fires, holds for a beat and hides again.
+// Poses are bone rotations derived from the prefab's aiming pose; the legs are handled by EnemyBody.
+// There are no animation clips.
 [DisallowMultipleComponent]
 public sealed class EnemyGunman : MonoBehaviour
 {
@@ -12,7 +14,11 @@ public sealed class EnemyGunman : MonoBehaviour
     // A bullet leaves the muzzle.
     public static event Action<EnemyGunman> ShotFired;
 
-    private enum State { Waiting, Aiming, Firing, Cooldown }
+    private enum State { Hidden, Exposing, Aiming, Firing, Holding, Hiding }
+
+    private const string DefaultBlockerLayer = "StreetCover";
+    private static readonly int FloorHeightId = Shader.PropertyToID("_FloorHeight");
+    private const float NoFloor = -100000f;
 
     [Header("Rig")]
     [SerializeField] private ProjectileSpawner gun;
@@ -29,27 +35,43 @@ public sealed class EnemyGunman : MonoBehaviour
     [SerializeField, Tooltip("Free arm direction while waiting, in the enemy's space.")]
     private Vector3 idleSupportArmDirection = new Vector3(-0.2f, -1f, 0.1f);
 
+    [Header("Legs, hips, crouch and side steps")]
+    [SerializeField] private EnemyBody body = new EnemyBody();
+
+    [Header("Cover")]
+    [SerializeField, Min(0f), Tooltip("Muzzle height above the feet when standing to shoot, for checks made before showing.")]
+    private float exposedMuzzleHeight = 1.3f;
+    [SerializeField, Tooltip("Colliders that stop bullets. Empty uses the StreetCover layer when it exists.")]
+    private LayerMask lineOfFireBlockers;
+
     [Header("Engagement")]
-    [SerializeField, Min(0f), Tooltip("Starts aiming once the player is this close, metres.")]
+    [SerializeField, Min(0f), Tooltip("Starts showing itself once the player is this close, metres.")]
     private float engageDistance = 38f;
-    [SerializeField, Min(0f), Tooltip("Never starts aiming closer than this, metres.")]
+    [SerializeField, Min(0f), Tooltip("Never starts showing itself closer than this, metres.")]
     private float minFireDistance = 15f;
-    [SerializeField, Range(0f, 0.5f), Tooltip("Margin inside the screen edges the muzzle must be in to start aiming.")]
+    [SerializeField, Range(0f, 0.5f), Tooltip("Margin inside the screen edges the shooting position must be in.")]
     private float viewMargin = 0.03f;
     [SerializeField, Min(1)] private int maxSimultaneousShooters = 2;
 
     [Header("Rhythm, game seconds")]
+    [SerializeField, Tooltip("Time hidden between shots (min, max); random so enemies do not show in unison.")]
+    private Vector2 hiddenTime = new Vector2(1f, 1.5f);
+    [SerializeField, Min(0.01f), Tooltip("Rising from the crouch behind low cover, and sinking back into it.")]
+    private float standUpDuration = 0.35f;
+    [SerializeField, Min(0.01f), Tooltip("One foot's move in a side step out from an edge, and back.")]
+    private float footMoveDuration = 0.12f;
     [SerializeField, Min(0.01f)] private float raiseDuration = 0.25f;
-    [SerializeField, Min(0f), Tooltip("Warning from the start of the raise to the first bullet.")]
+    [SerializeField, Min(0f), Tooltip("Warning from the moment the enemy is out to the first bullet.")]
     private float aimDuration = 0.5f;
     [SerializeField, Min(1), Tooltip("Bullets after each warning. Single shots for now; bursts may come later.")]
     private int burstSize = 1;
     [SerializeField, Min(0f)] private float burstInterval = 0.12f;
     [SerializeField, Min(0f), Tooltip("Random aim offset of the follow-up bullets in a burst, metres.")]
     private float burstSpread = 0.12f;
-    [SerializeField, Min(0), Tooltip("Warnings per enemy; each ends in burstSize bullets.")]
+    [SerializeField, Min(0), Tooltip("Times the enemy shows itself to shoot; each ends in burstSize bullets.")]
     private int maxBursts = 3;
-    [SerializeField, Min(0f)] private float cooldown = 1f;
+    [SerializeField, Min(0f), Tooltip("Stays out after the shot so the recoil reads.")]
+    private float holdAfterShot = 0.25f;
     [SerializeField, Min(0.01f)] private float lowerDuration = 0.4f;
     [SerializeField, Min(0f), Tooltip("Degrees per game second.")] private float turnSpeed = 240f;
 
@@ -62,6 +84,8 @@ public sealed class EnemyGunman : MonoBehaviour
     private Transform target;
     private Transform muzzle;
     private Transform gunBody;
+    private Renderer[] bodyRenderers;
+    private MaterialPropertyBlock properties;
     private Quaternion aimHandRotation;
     private Quaternion aimUpperArmRotation;
     private Quaternion aimForearmRotation;
@@ -71,8 +95,15 @@ public sealed class EnemyGunman : MonoBehaviour
     private Quaternion spineRotation;
     private bool configurationValid;
 
+    private bool hasPlacement;
+    private EnemyCover cover;
+    private Vector3 hiddenPosition;
+    private Vector3 exposedPosition;
+    private int sideSteps;
+
     private State state;
     private float stateTimer;
+    private float exposure;
     private float aimWeight;
     private float recoil;
     private int shotsLeft;
@@ -85,9 +116,62 @@ public sealed class EnemyGunman : MonoBehaviour
     public float AimProgress => state == State.Aiming && aimDuration > 0f ? 1f - stateTimer / aimDuration
         : state == State.Firing ? 1f : 0f;
 
+    // Call before activating a pooled enemy; null stands it in the open where it was placed.
+    public void AssignSpot(EnemySpot spot)
+    {
+        hasPlacement = spot != null;
+        if (spot == null) return;
+        cover = spot.Cover;
+        hiddenPosition = spot.HiddenPosition;
+        exposedPosition = spot.ExposedPosition;
+    }
+
     public void ShowTemporaryLedge(bool show)
     {
         if (temporaryLedge != null) temporaryLedge.SetActive(show);
+    }
+
+    // Where the feet stand when this enemy shoots: out of its cover.
+    public Vector3 ShootingPosition => exposedPosition;
+
+    // For the death screen: stands the enemy where it fired from, facing the player, gun raised over
+    // the shoulder as just before levelling it, so the weapon reads in silhouette (levelled at the camera
+    // it hides behind the body). Disable this component first, or the next frame poses it again.
+    public void PoseReadyToShoot()
+    {
+        if (!configurationValid) return;
+        transform.position = exposedPosition;
+        if (target != null) transform.rotation = FacingTarget();
+        exposure = 1f;
+        aimWeight = 0f;
+        recoil = 0f;
+        ApplyPose();
+    }
+
+    // For the death screen, where the game clock stands still: walks the enemy into the PoseReadyToShoot pose
+    // with its real side step or stand-up and lowers the gun back over the shoulder, on the caller's clock.
+    // Call every frame with this component disabled; returns true once the enemy stands ready.
+    // From deep in cover it takes at most about half a second.
+    public bool StepToReadyPose(float deltaSeconds)
+    {
+        if (!configurationValid) return true;
+        float dt = Mathf.Max(0f, deltaSeconds);
+        if (target != null)
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, FacingTarget(), turnSpeed * dt);
+        exposure = cover == EnemyCover.None ? 1f : Mathf.MoveTowards(exposure, 1f, dt / ExposeDuration);
+        aimWeight = Mathf.MoveTowards(aimWeight, 0f, dt / lowerDuration);
+        recoil = Mathf.MoveTowards(recoil, 0f, dt / recoilRecovery);
+        PlaceRoot();
+        ApplyPose();
+        return exposure >= 1f && aimWeight <= 0f && recoil <= 0f;
+    }
+
+    // In a side step the body follows the feet; elsewhere the root stays on the spot.
+    private void PlaceRoot()
+    {
+        float travel = cover == EnemyCover.Edge ? body.BodyProgress(exposure, sideSteps)
+            : exposure * exposure * (3f - 2f * exposure);
+        transform.position = Vector3.Lerp(hiddenPosition, exposedPosition, travel);
     }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
@@ -98,13 +182,32 @@ public sealed class EnemyGunman : MonoBehaviour
         muzzle = gun != null ? gun.ShootPoint : null;
         gunBody = muzzle != null ? muzzle.parent : null;
         configurationValid = gun != null && spine != null && gunHand != null && supportUpperArm != null &&
-            supportForearm != null && muzzle != null && gunBody != null && supportForearm.childCount > 0;
+            supportForearm != null && muzzle != null && gunBody != null && supportForearm.childCount > 0 &&
+            body != null && body.IsValid;
         if (!configurationValid)
         {
-            Debug.LogError("EnemyGunman requires a gun with a muzzle, the spine, gun hand and free arm bones.", this);
+            Debug.LogError("EnemyGunman requires a gun with a muzzle and the spine, arm, hip and leg bones.", this);
             return;
         }
+        if (lineOfFireBlockers.value == 0) lineOfFireBlockers = LayerMask.GetMask(DefaultBlockerLayer);
+        CollectBodyRenderers();
         CapturePoses();
+        body.Capture(transform);
+    }
+
+    private void CollectBodyRenderers()
+    {
+        var all = GetComponentsInChildren<Renderer>(true);
+        int count = 0;
+        var renderers = new Renderer[all.Length];
+        foreach (var candidate in all)
+        {
+            if (temporaryLedge != null && candidate.transform.IsChildOf(temporaryLedge.transform)) continue;
+            renderers[count++] = candidate;
+        }
+        Array.Resize(ref renderers, count);
+        bodyRenderers = renderers;
+        properties = new MaterialPropertyBlock();
     }
 
     // The prefab is posed aiming; the waiting pose turns the gun and the free arm away from it.
@@ -134,14 +237,26 @@ public sealed class EnemyGunman : MonoBehaviour
 
     private void OnEnable()
     {
-        state = State.Waiting;
+        if (!hasPlacement)
+        {
+            cover = EnemyCover.None;
+            hiddenPosition = exposedPosition = transform.position;
+        }
+        Vector3 stepVector = exposedPosition - hiddenPosition;
+        stepVector.y = 0f;
+        sideSteps = body != null && body.IsValid ? body.StepCount(stepVector.magnitude) : 1;
+        state = State.Hidden;
         stateTimer = 0f;
+        exposure = 0f;
         aimWeight = 0f;
         recoil = 0f;
         shotsLeft = 0;
         burstsFired = 0;
         var mainCamera = Camera.main;
         target = mainCamera != null ? mainCamera.transform : null;
+        if (!configurationValid) return;
+        ApplyFloorClip();
+        transform.position = hiddenPosition;
         if (target != null) transform.rotation = FacingTarget();
         ApplyPose();
     }
@@ -149,6 +264,23 @@ public sealed class EnemyGunman : MonoBehaviour
     private void OnDisable()
     {
         ReleaseShooterSlot();
+        hasPlacement = false;
+    }
+
+    // Time to show or hide: standing up from the crouch, or the feet's moves of the side step.
+    private float ExposeDuration => cover == EnemyCover.Low ? standUpDuration
+        : cover == EnemyCover.Edge ? sideSteps * 2 * footMoveDuration : 0f;
+
+    // The coat tails of a crouching enemy may still touch the floor; the shader cuts away what goes under it.
+    private void ApplyFloorClip()
+    {
+        float floor = cover == EnemyCover.Low ? hiddenPosition.y - 0.005f : NoFloor;
+        foreach (var bodyRenderer in bodyRenderers)
+        {
+            bodyRenderer.GetPropertyBlock(properties);
+            properties.SetFloat(FloorHeightId, floor);
+            bodyRenderer.SetPropertyBlock(properties);
+        }
     }
 
     private void LateUpdate()
@@ -159,10 +291,11 @@ public sealed class EnemyGunman : MonoBehaviour
         transform.rotation = Quaternion.RotateTowards(transform.rotation, FacingTarget(), turnSpeed * deltaTime);
         UpdateState(deltaTime);
 
-        bool raised = state == State.Aiming || state == State.Firing;
+        bool raised = state == State.Aiming || state == State.Firing || state == State.Holding;
         aimWeight = Mathf.MoveTowards(aimWeight, raised ? 1f : 0f,
             deltaTime / (raised ? raiseDuration : lowerDuration));
         recoil = Mathf.MoveTowards(recoil, 0f, deltaTime / recoilRecovery);
+        PlaceRoot();
         ApplyPose();
 
         if (state == State.Firing) FireDueShots();
@@ -170,10 +303,17 @@ public sealed class EnemyGunman : MonoBehaviour
 
     private void UpdateState(float deltaTime)
     {
+        bool inOpen = cover == EnemyCover.None;
         switch (state)
         {
-            case State.Waiting:
-                if (burstsFired < maxBursts && CanEngage() && TakeShooterSlot())
+            case State.Hidden:
+                stateTimer -= deltaTime;
+                if (stateTimer <= 0f && burstsFired < maxBursts && CanEngage() && TakeShooterSlot())
+                    state = State.Exposing;
+                break;
+            case State.Exposing:
+                exposure = inOpen ? 1f : Mathf.MoveTowards(exposure, 1f, deltaTime / ExposeDuration);
+                if (exposure >= 1f)
                 {
                     state = State.Aiming;
                     stateTimer = aimDuration;
@@ -182,7 +322,7 @@ public sealed class EnemyGunman : MonoBehaviour
                 break;
             case State.Aiming:
                 stateTimer -= deltaTime;
-                // The overshoot stays in the timer, so the burst keeps its rhythm on long frames.
+                // The overshoot stays in the timer, so a burst keeps its rhythm on long frames.
                 if (stateTimer <= 0f)
                 {
                     state = State.Firing;
@@ -192,9 +332,21 @@ public sealed class EnemyGunman : MonoBehaviour
             case State.Firing:
                 stateTimer -= deltaTime;
                 break;
-            case State.Cooldown:
+            case State.Holding:
                 stateTimer -= deltaTime;
-                if (stateTimer <= 0f) state = State.Waiting;
+                if (stateTimer <= 0f)
+                {
+                    state = State.Hiding;
+                    ReleaseShooterSlot();
+                }
+                break;
+            case State.Hiding:
+                exposure = inOpen ? 0f : Mathf.MoveTowards(exposure, 0f, deltaTime / ExposeDuration);
+                if (exposure <= 0f)
+                {
+                    state = State.Hidden;
+                    stateTimer = UnityEngine.Random.Range(hiddenTime.x, Mathf.Max(hiddenTime.x, hiddenTime.y));
+                }
                 break;
         }
     }
@@ -204,6 +356,12 @@ public sealed class EnemyGunman : MonoBehaviour
     {
         while (shotsLeft > 0 && stateTimer <= 0f)
         {
+            // Something moved into the way (or the spot shoots into its own cover): no bullet through walls.
+            if (!LineOfFireClear(muzzle.position, target.position))
+            {
+                shotsLeft = 0;
+                break;
+            }
             // The first bullet goes where the warning pointed; only follow-ups scatter.
             bool firstOfBurst = shotsLeft == Mathf.Max(1, burstSize);
             Vector2 spread = firstOfBurst ? Vector2.zero : UnityEngine.Random.insideUnitCircle * burstSpread;
@@ -218,23 +376,31 @@ public sealed class EnemyGunman : MonoBehaviour
         if (shotsLeft == 0)
         {
             burstsFired++;
-            state = State.Cooldown;
-            stateTimer = cooldown;
-            ReleaseShooterSlot();
+            state = State.Holding;
+            stateTimer = holdAfterShot;
         }
     }
 
+    // Checked from where the muzzle will be once the enemy is out, before it shows itself.
     private bool CanEngage()
     {
-        Vector3 toTarget = target.position - muzzle.position;
+        Vector3 shootFrom = exposedPosition + Vector3.up * exposedMuzzleHeight;
+        Vector3 toTarget = target.position - shootFrom;
         float distance = toTarget.magnitude;
         if (toTarget.z >= 0f || distance > engageDistance || distance < minFireDistance) return false;
         var mainCamera = Camera.main;
         if (mainCamera == null) return false;
-        Vector3 viewport = mainCamera.WorldToViewportPoint(muzzle.position);
-        return viewport.z > 0f &&
+        Vector3 viewport = mainCamera.WorldToViewportPoint(shootFrom);
+        bool inView = viewport.z > 0f &&
             viewport.x >= viewMargin && viewport.x <= 1f - viewMargin &&
             viewport.y >= viewMargin && viewport.y <= 1f - viewMargin;
+        return inView && LineOfFireClear(shootFrom, target.position);
+    }
+
+    private bool LineOfFireClear(Vector3 from, Vector3 to)
+    {
+        return lineOfFireBlockers.value == 0 ||
+            !Physics.Linecast(from, to, lineOfFireBlockers, QueryTriggerInteraction.Ignore);
     }
 
     private bool TakeShooterSlot()
@@ -263,6 +429,14 @@ public sealed class EnemyGunman : MonoBehaviour
     private void ApplyPose()
     {
         if (!configurationValid) return;
+        float shown = exposure * exposure * (3f - 2f * exposure);
+        float crouch = cover == EnemyCover.Low ? 1f - shown : 0f;
+        bool stepping = cover == EnemyCover.Edge && exposure > 0f && exposure < 1f;
+        Vector3 stepVector = exposedPosition - hiddenPosition;
+        body.ResetPose();
+        body.ApplyCrouch(transform, crouch);
+        if (stepping) body.ApplyStepLean(transform, stepVector, exposure);
+
         float weight = aimWeight * aimWeight * (3f - 2f * aimWeight);
         spine.localRotation = spineRotation;
         Quaternion correction = Quaternion.identity;
@@ -286,10 +460,16 @@ public sealed class EnemyGunman : MonoBehaviour
             spine.rotation = Quaternion.AngleAxis(-kick, transform.right) * spine.rotation;
             gunHand.rotation = Quaternion.AngleAxis(-kick, transform.right) * gunHand.rotation;
         }
+
+        // Legs last, once the hips are where the crouch put them; at rest they need no solving.
+        if (crouch > 0f) body.PlantFeet(transform, transform.position, Vector3.zero, 0f, 1);
+        else if (stepping) body.PlantFeet(transform, hiddenPosition, stepVector, exposure, sideSteps);
     }
 
     private void OnValidate()
     {
         minFireDistance = Mathf.Min(minFireDistance, engageDistance);
+        hiddenTime.x = Mathf.Max(0f, hiddenTime.x);
+        hiddenTime.y = Mathf.Max(hiddenTime.x, hiddenTime.y);
     }
 }

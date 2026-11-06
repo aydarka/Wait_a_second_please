@@ -13,6 +13,8 @@ Shader "WaitASecond/NoirEnemy"
         _RimDirection ("Rim Direction (screen x, y)", Vector) = (-1, 0.35, 0, 0)
         _RimDepthBias ("Rim Depth Bias (m)", Range(0, 1)) = 0.2
         _RimFade ("Rim Fade (hidden beyond, full within, m)", Vector) = (50, 35, 0, 0)
+        // Set per enemy by EnemyGunman: a crouching enemy sinks below its spot and everything under the floor is cut away.
+        _FloorHeight ("Cut Below (world height)", Float) = -100000
     }
 
     SubShader
@@ -29,7 +31,23 @@ Shader "WaitASecond/NoirEnemy"
             float4 _RimDirection;
             float _RimDepthBias;
             float4 _RimFade;
+            float _FloorHeight;
         CBUFFER_END
+
+        struct ClippedVaryings
+        {
+            float4 positionCS : SV_POSITION;
+            float heightWS : TEXCOORD0;
+        };
+
+        ClippedVaryings ClippedVert(float4 positionOS : POSITION)
+        {
+            ClippedVaryings output;
+            float3 positionWS = TransformObjectToWorld(positionOS.xyz);
+            output.positionCS = TransformWorldToHClip(positionWS);
+            output.heightWS = positionWS.y;
+            return output;
+        }
         ENDHLSL
 
         Pass
@@ -38,16 +56,12 @@ Shader "WaitASecond/NoirEnemy"
             Tags { "LightMode" = "UniversalForward" }
 
             HLSLPROGRAM
-            #pragma vertex Vert
+            #pragma vertex ClippedVert
             #pragma fragment Frag
 
-            float4 Vert(float4 positionOS : POSITION) : SV_POSITION
+            half4 Frag(ClippedVaryings input) : SV_Target
             {
-                return TransformObjectToHClip(positionOS.xyz);
-            }
-
-            half4 Frag() : SV_Target
-            {
+                clip(input.heightWS - _FloorHeight);
                 // No fog: black fades into the black street fog anyway, and the rim handles distance.
                 return half4(_BaseColor.rgb, 1.0);
             }
@@ -63,7 +77,7 @@ Shader "WaitASecond/NoirEnemy"
             #pragma vertex Vert
             #pragma fragment Frag
 
-            float4 Vert(float4 positionOS : POSITION) : SV_POSITION
+            ClippedVaryings Vert(float4 positionOS : POSITION)
             {
                 float3 positionWS = TransformObjectToWorld(positionOS.xyz);
                 float4 positionCS = TransformWorldToHClip(positionWS);
@@ -83,11 +97,15 @@ Shader "WaitASecond/NoirEnemy"
                 direction.y *= _ProjectionParams.x;
                 float pixels = _RimWidth * reveal * _ScreenParams.y / 1080.0;
                 positionCS.xy += direction * pixels * 2.0 / _ScreenParams.xy * positionCS.w;
-                return positionCS;
+                ClippedVaryings output;
+                output.positionCS = positionCS;
+                output.heightWS = positionWS.y;
+                return output;
             }
 
-            half4 Frag() : SV_Target
+            half4 Frag(ClippedVaryings input) : SV_Target
             {
+                clip(input.heightWS - _FloorHeight);
                 return half4(_RimColor.rgb, 1.0);
             }
             ENDHLSL
@@ -101,16 +119,12 @@ Shader "WaitASecond/NoirEnemy"
             ColorMask R
 
             HLSLPROGRAM
-            #pragma vertex DepthVert
+            #pragma vertex ClippedVert
             #pragma fragment DepthFrag
 
-            float4 DepthVert(float4 positionOS : POSITION) : SV_POSITION
+            half DepthFrag(ClippedVaryings input) : SV_Target
             {
-                return TransformObjectToHClip(positionOS.xyz);
-            }
-
-            half DepthFrag() : SV_Target
-            {
+                clip(input.heightWS - _FloorHeight);
                 return 0;
             }
             ENDHLSL
@@ -136,18 +150,22 @@ Shader "WaitASecond/NoirEnemy"
             {
                 float4 positionCS : SV_POSITION;
                 half3 normalWS : TEXCOORD0;
+                float heightWS : TEXCOORD1;
             };
 
             Varyings DepthNormalsVert(Attributes input)
             {
                 Varyings output;
-                output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
+                float3 positionWS = TransformObjectToWorld(input.positionOS.xyz);
+                output.positionCS = TransformWorldToHClip(positionWS);
                 output.normalWS = TransformObjectToWorldNormal(input.normalOS);
+                output.heightWS = positionWS.y;
                 return output;
             }
 
             half4 DepthNormalsFrag(Varyings input) : SV_Target
             {
+                clip(input.heightWS - _FloorHeight);
                 return half4(NormalizeNormalPerPixel(input.normalWS), 0.0);
             }
             ENDHLSL
