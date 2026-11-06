@@ -100,6 +100,9 @@ Shader "WaitASecond/ShotSolid"
             {
                 float4 positionCS = TransformObjectToHClip(positionOS.xyz);
                 float4 centreCS = TransformObjectToHClip(float3(0.0, 0.0, 0.0));
+                // A bullet passing right by the eyes has points at or behind the camera, where the screen
+                // projection blows up: there the outline is left out rather than smeared across the view.
+                if (positionCS.w < 0.05 || centreCS.w < 0.05) return positionCS;
                 float2 outward = (positionCS.xy / positionCS.w - centreCS.xy / centreCS.w) * _ScreenParams.xy;
                 float2 direction = outward / max(length(outward), 1e-6);
                 float pixels = _OutlinePixels * _ScreenParams.y / 1080.0;

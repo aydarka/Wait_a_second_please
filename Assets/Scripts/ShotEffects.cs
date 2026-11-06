@@ -11,6 +11,7 @@ public sealed class ShotEffects : MonoBehaviour
 {
     private const int RingCapacity = 256;
     private const float FlashDuration = 0.06f;
+    private const float EnemyFlashRadius = 0.35f;
     private const float ReferenceScreenHeight = 1080f;
     // Tells sit this far towards the camera so the gun never cuts into them, metres.
     private const float TowardCamera = 0.15f;
@@ -30,6 +31,7 @@ public sealed class ShotEffects : MonoBehaviour
     private struct Flash
     {
         public Vector3 Position;
+        public float Radius;
         public float Born;
         public int Seed;
     }
@@ -119,7 +121,19 @@ public sealed class ShotEffects : MonoBehaviour
     {
         var effects = Current;
         if (effects == null || enemy == null || enemy.Muzzle == null) return;
-        effects.flashes.Add(new Flash { Position = enemy.Muzzle.position, Born = Time.time, Seed = Random.Range(0, int.MaxValue) });
+        effects.AddFlash(enemy.Muzzle.position, EnemyFlashRadius);
+    }
+
+    // A muzzle flash with the given radius in metres, never smaller than a size in pixels.
+    public static void MuzzleFlash(Vector3 position, float radius)
+    {
+        var effects = Current;
+        if (effects != null) effects.AddFlash(position, radius);
+    }
+
+    private void AddFlash(Vector3 position, float radius)
+    {
+        flashes.Add(new Flash { Position = position, Radius = radius, Born = Time.time, Seed = Random.Range(0, int.MaxValue) });
     }
 
     // The game clock stands still on the death screen, so the shooter walks on real time: his own side
@@ -326,7 +340,7 @@ public sealed class ShotEffects : MonoBehaviour
                 float closing = Mathf.InverseLerp(glint.LevelProgress, 1f, glint.Enemy.AimProgress);
                 AddGlint(view.transform, glint.Anchor, closing, pixelAtOneMetre);
             }
-            foreach (var flash in flashes) AddFlash(view.transform, flash.Position, flash.Seed, pixelAtOneMetre);
+            foreach (var flash in flashes) DrawFlash(view.transform, flash, pixelAtOneMetre);
         }
         inkMesh.Clear();
         inkMesh.SetVertices(inkVertices);
@@ -366,11 +380,11 @@ public sealed class ShotEffects : MonoBehaviour
     }
 
     // A flat jagged star with a black edge; every shot gets its own rays.
-    private void AddFlash(Transform view, Vector3 muzzle, int seed, float pixelAtOneMetre)
+    private void DrawFlash(Transform view, Flash flash, float pixelAtOneMetre)
     {
-        Vector3 centre = TowardViewer(view, muzzle, pixelAtOneMetre, out float pixel);
-        float outer = Mathf.Max(0.35f, 26f * pixel);
-        var random = new System.Random(seed);
+        Vector3 centre = TowardViewer(view, flash.Position, pixelAtOneMetre, out float pixel);
+        float outer = Mathf.Max(flash.Radius, 26f * pixel);
+        var random = new System.Random(flash.Seed);
         const int points = 16;
         float step = 2f * Mathf.PI / points;
         starPoints.Clear();
