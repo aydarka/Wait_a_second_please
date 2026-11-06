@@ -14,7 +14,8 @@ public sealed class EnemyGunman : MonoBehaviour
     // A bullet leaves the muzzle.
     public static event Action<EnemyGunman> ShotFired;
 
-    private enum State { Hidden, Exposing, Aiming, Firing, Holding, Hiding }
+    // Held: out in the open for good, waiting for the player's answer. Dead: falling, then gone.
+    private enum State { Hidden, Exposing, Aiming, Firing, Holding, Hiding, Held, Dead }
 
     private const string DefaultBlockerLayer = "StreetCover";
     private static readonly int FloorHeightId = Shader.PropertyToID("_FloorHeight");
@@ -37,6 +38,9 @@ public sealed class EnemyGunman : MonoBehaviour
 
     [Header("Legs, hips, crouch and side steps")]
     [SerializeField] private EnemyBody body = new EnemyBody();
+
+    [Header("Death: knocked back, blood, hat flying off")]
+    [SerializeField] private EnemyDeath death = new EnemyDeath();
 
     [Header("Cover")]
     [SerializeField, Min(0f), Tooltip("Muzzle height above the feet when standing to shoot, for checks made before showing.")]
@@ -114,12 +118,44 @@ public sealed class EnemyGunman : MonoBehaviour
     private int shotsLeft;
     private int burstsFired;
     private bool holdsShooterSlot;
+    private Vector3 deathPivot;
+    private Quaternion deathStartRotation;
 
     public Transform Muzzle => muzzle;
     public bool IsAiming => state == State.Aiming;
     // 0 when the warning starts, 1 when the first bullet leaves.
     public float AimProgress => state == State.Aiming && aimDuration > 0f ? 1f - stateTimer / aimDuration
         : state == State.Firing ? 1f : 0f;
+    public bool IsDead => state == State.Dead;
+    // Where the player's answering bullet should go: the chest in the current pose.
+    public Vector3 TargetPoint => configurationValid ? spine.position : transform.position + Vector3.up * exposedMuzzleHeight;
+
+    // The player has answered this enemy's shot: it stops hiding and shooting, comes back out with its own
+    // step or stand-up if it already ducked, and stays in the open, gun over the shoulder, until Die.
+    public void HoldExposed()
+    {
+        if (!configurationValid || state == State.Dead || state == State.Held) return;
+        state = State.Held;
+        shotsLeft = 0;
+        burstsFired = Mathf.Max(burstsFired, maxBursts);
+        ReleaseShooterSlot();
+    }
+
+    // The agreed death, in game time: knocked back along the shot, a red splash behind the silhouette,
+    // the hat flying off, then the body sinks into the dark and a red stain stays behind.
+    public void Die(Vector3 shotDirection)
+    {
+        if (!configurationValid || state == State.Dead) return;
+        ReleaseShooterSlot();
+        state = State.Dead;
+        shotsLeft = 0;
+        recoil = 0f;
+        // Mid-step legs would be planted at the old spot: the fall starts from where the body is now.
+        if (cover == EnemyCover.Edge && exposure > 0f) exposure = 1f;
+        deathPivot = transform.position;
+        deathStartRotation = transform.rotation;
+        death.Begin(transform, shotDirection, spine.position, exposedPosition.y, lineOfFireBlockers);
+    }
 
     // Call before activating a pooled enemy; null stands it in the open where it was placed.
     public void AssignSpot(EnemySpot spot)
@@ -144,7 +180,7 @@ public sealed class EnemyGunman : MonoBehaviour
     // it hides behind the body). Disable this component first, or the next frame poses it again.
     public void PoseReadyToShoot()
     {
-        if (!configurationValid) return;
+        if (!configurationValid || state == State.Dead) return;
         transform.position = exposedPosition;
         if (target != null) transform.rotation = FacingTarget();
         exposure = 1f;
@@ -159,7 +195,7 @@ public sealed class EnemyGunman : MonoBehaviour
     // From deep in cover it takes at most about half a second.
     public bool StepToReadyPose(float deltaSeconds)
     {
-        if (!configurationValid) return true;
+        if (!configurationValid || state == State.Dead) return true;
         float dt = Mathf.Max(0f, deltaSeconds);
         if (target != null)
             transform.rotation = Quaternion.RotateTowards(transform.rotation, FacingTarget(), turnSpeed * dt);
@@ -188,16 +224,17 @@ public sealed class EnemyGunman : MonoBehaviour
         gunBody = muzzle != null ? muzzle.parent : null;
         configurationValid = gun != null && spine != null && gunHand != null && supportUpperArm != null &&
             supportForearm != null && muzzle != null && gunBody != null && supportForearm.childCount > 0 &&
-            body != null && body.IsValid;
+            body != null && body.IsValid && death != null && death.IsValid;
         if (!configurationValid)
         {
-            Debug.LogError("EnemyGunman requires a gun with a muzzle and the spine, arm, hip and leg bones.", this);
+            Debug.LogError("EnemyGunman requires a gun with a muzzle, the spine, arm, hip and leg bones, the hat and a blood material.", this);
             return;
         }
         if (lineOfFireBlockers.value == 0) lineOfFireBlockers = LayerMask.GetMask(DefaultBlockerLayer);
         CollectBodyRenderers();
         CapturePoses();
         body.Capture(transform);
+        death.Capture();
     }
 
     private void CollectBodyRenderers()
@@ -261,6 +298,7 @@ public sealed class EnemyGunman : MonoBehaviour
         target = mainCamera != null ? mainCamera.transform : null;
         runner = target != null ? target.GetComponent<CameraMovement>() : null;
         if (!configurationValid) return;
+        death.ResetState();
         ApplyFloorClip();
         transform.position = hiddenPosition;
         if (target != null) transform.rotation = FacingTarget();
@@ -271,6 +309,8 @@ public sealed class EnemyGunman : MonoBehaviour
     {
         ReleaseShooterSlot();
         hasPlacement = false;
+        // The death screen disables a living shooter to pose it; only a dead body's leftovers go away.
+        if (configurationValid && state == State.Dead && !gameObject.activeInHierarchy) death.ResetState();
     }
 
     // Time to show or hide: standing up from the crouch, or the feet's moves of the side step.
@@ -280,11 +320,15 @@ public sealed class EnemyGunman : MonoBehaviour
     // The coat tails of a crouching enemy may still touch the floor; the shader cuts away what goes under it.
     private void ApplyFloorClip()
     {
-        float floor = cover == EnemyCover.Low ? hiddenPosition.y - 0.005f : NoFloor;
+        SetFloorCut(cover == EnemyCover.Low ? hiddenPosition.y - 0.005f : NoFloor);
+    }
+
+    private void SetFloorCut(float height)
+    {
         foreach (var bodyRenderer in bodyRenderers)
         {
             bodyRenderer.GetPropertyBlock(properties);
-            properties.SetFloat(FloorHeightId, floor);
+            properties.SetFloat(FloorHeightId, height);
             bodyRenderer.SetPropertyBlock(properties);
         }
     }
@@ -293,6 +337,11 @@ public sealed class EnemyGunman : MonoBehaviour
     {
         if (!configurationValid || target == null) return;
         float deltaTime = Time.deltaTime;
+        if (state == State.Dead)
+        {
+            UpdateDeath(deltaTime);
+            return;
+        }
 
         transform.rotation = Quaternion.RotateTowards(transform.rotation, FacingTarget(), turnSpeed * deltaTime);
         UpdateState(deltaTime);
@@ -307,11 +356,24 @@ public sealed class EnemyGunman : MonoBehaviour
         if (state == State.Firing) FireDueShots();
     }
 
+    private void UpdateDeath(float deltaTime)
+    {
+        death.Advance(deltaTime);
+        aimWeight = Mathf.MoveTowards(aimWeight, 0f, deltaTime / lowerDuration);
+        transform.SetPositionAndRotation(deathPivot, death.Tilt() * deathStartRotation);
+        ApplyPose();
+        death.AfterPose(transform, spine, Camera.main);
+        if (death.Cutting(out float cut)) SetFloorCut(cut);
+    }
+
     private void UpdateState(float deltaTime)
     {
         bool inOpen = cover == EnemyCover.None;
         switch (state)
         {
+            case State.Held:
+                exposure = inOpen ? 1f : Mathf.MoveTowards(exposure, 1f, deltaTime / ExposeDuration);
+                break;
             case State.Hidden:
                 stateTimer -= deltaTime;
                 if (stateTimer <= 0f && burstsFired < maxBursts && CanEngage() && TakeShooterSlot())
