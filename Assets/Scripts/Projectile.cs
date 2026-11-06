@@ -9,8 +9,6 @@ public class Projectile : MonoBehaviour
     private float hitRadius = 0.35f;
     [SerializeField, Min(0f), Tooltip("Distance behind the player after which a missed bullet returns to the pool.")]
     private float flyByDistance = 6f;
-    [SerializeField, Min(0f), Tooltip("How far in front of the eyes the killing bullet hangs, metres.")]
-    private float freezeDistance = 0.7f;
 
     [Header("Air rings")]
     [SerializeField, Min(0.05f), Tooltip("Flight distance between rings, metres.")]
@@ -30,6 +28,8 @@ public class Projectile : MonoBehaviour
     [SerializeField, Range(0f, 1f), Tooltip("Ring strength is how slow time runs at its birth; weaker rings are not born.")]
     private float minRingStrength = 0.1f;
 
+    private static int launches;
+
     private Vector3 initialScale;
     private float flightDuration;
     private float elapsedFlightTime;
@@ -39,10 +39,10 @@ public class Projectile : MonoBehaviour
     private Vector3 velocity;
     private float meetingDistance;
     private float nextRingDistance;
+    private int shotId;
     private PrefabPool owner;
     private bool isFlying;
     private bool passedPlayer;
-    private bool frozen;
 
     public float ZSpeed => Mathf.Max(0.01f, speed);
 
@@ -64,11 +64,11 @@ public class Projectile : MonoBehaviour
         velocity = flightDuration > 0f ? flightDirection / flightDuration : flightDirection.normalized * ZSpeed;
         meetingDistance = flightDirection.magnitude;
         nextRingDistance = ringSpacing;
+        shotId = ++launches;
         elapsedFlightTime = 0f;
         owner = pool;
         isFlying = true;
         passedPlayer = false;
-        frozen = false;
     }
 
     private void Update()
@@ -113,11 +113,6 @@ public class Projectile : MonoBehaviour
         }
     }
 
-    private void LateUpdate()
-    {
-        if (frozen) HoldBeforeEyes();
-    }
-
     // Rings stay where they were born and only exist while time is slowed: the trail records the player's time.
     private void SpawnRings()
     {
@@ -140,7 +135,7 @@ public class Projectile : MonoBehaviour
             float wave = 0.5f + 0.5f * Mathf.Sin(distance * 2f * Mathf.PI / ringWaveLength);
             float radius = Mathf.Lerp(ringRadius.x, ringRadius.y, wave) * growth * Random.Range(0.9f, 1.1f);
             float birthTime = Time.time - (flown - distance) / pathSpeed;
-            ShotEffects.AddRing(launchPosition + direction * distance, direction, radius, ringLineWidth * growth,
+            ShotEffects.AddRing(shotId, launchPosition + direction * distance, direction, radius, ringLineWidth * growth,
                 strength, birthTime, ringLifetime, ringOpenDistance / pathSpeed);
         }
     }
@@ -155,10 +150,10 @@ public class Projectile : MonoBehaviour
         float missDistance = miss.magnitude;
         if (missDistance <= hitRadius)
         {
-            GameSession.ReportPlayerHit(crossing);
-            isFlying = false;
-            frozen = true;
-            HoldBeforeEyes();
+            // The killing bullet and its rings vanish: the death screen shows who fired it instead.
+            ShotEffects.ClearRings(shotId);
+            GameSession.ReportPlayerHit(crossing, FindShooter());
+            Finish();
         }
         else
         {
@@ -166,13 +161,25 @@ public class Projectile : MonoBehaviour
         }
     }
 
-    // The killing bullet hangs in front of the eyes, framed by the hole in the death screen.
-    private void HoldBeforeEyes()
+    // The bullet's pool lives on the enemy that fired it; the gun nearest the launch point is the fallback.
+    private Transform FindShooter()
     {
-        var player = Camera.main;
-        if (player == null) return;
-        Transform eyes = player.transform;
-        transform.SetPositionAndRotation(eyes.position + eyes.forward * freezeDistance, Quaternion.LookRotation(-eyes.forward));
+        var shooter = owner != null ? owner.GetComponentInParent<EnemyGunman>() : null;
+        if (shooter == null)
+        {
+            float nearest = float.PositiveInfinity;
+            foreach (var gunman in FindObjectsByType<EnemyGunman>(FindObjectsSortMode.None))
+            {
+                if (gunman.Muzzle == null) continue;
+                float distance = (gunman.Muzzle.position - launchPosition).sqrMagnitude;
+                if (distance < nearest)
+                {
+                    nearest = distance;
+                    shooter = gunman;
+                }
+            }
+        }
+        return shooter != null ? shooter.transform : null;
     }
 
     private void Finish()
@@ -188,7 +195,6 @@ public class Projectile : MonoBehaviour
             transform.localScale = initialScale;
         isFlying = false;
         passedPlayer = false;
-        frozen = false;
         owner = null;
         elapsedFlightTime = 0f;
         flightDuration = 0f;

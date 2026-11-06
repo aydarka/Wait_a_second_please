@@ -16,18 +16,27 @@ public sealed class GameSession : MonoBehaviour
     private float titleDuration = 3f;
     [SerializeField, Min(0f), Tooltip("Misses closer than this, in metres, flash a near-miss message.")]
     private float nearMissDistance = 0.9f;
-    [SerializeField, Min(0f), Tooltip("Time scale while the death shot plays out.")]
-    private float deathTimeScale = 0.05f;
     [SerializeField, Min(0f), Tooltip("Real-time seconds before a tap restarts the run.")]
     private float restartDelay = 1.2f;
-    [SerializeField, Min(0f), Tooltip("Real-time seconds before the run restarts on its own.")]
-    private float autoRestartDelay = 4f;
-    [SerializeField, Tooltip("Tip radius of the hole onto the street as the hit screen floods in and once it has closed, in screen heights.")]
-    private Vector2 hitHoleRadius = new Vector2(0.75f, 0.17f);
-    [SerializeField, Min(0.01f), Tooltip("Real-time seconds the hole in the hit screen takes to close in.")]
-    private float hitHoleCloseDuration = 0.45f;
+
+    [Header("Hit screen")]
+    [SerializeField, Min(0.1f), Tooltip("Tip radius of the closed hole around the shooter, in multiples of his height on screen.")]
+    private float shooterHoleScale = 1.4f;
+    [SerializeField, Min(0f), Tooltip("Smallest tip radius of the closed hole, in screen heights.")]
+    private float minShooterHole = 0.1f;
+    [SerializeField, Min(0.01f), Tooltip("Real-time seconds the red closes in from the screen edges.")]
+    private float hitScreenInDuration = 0.35f;
+    [SerializeField, Tooltip("How closed the red is while it comes in: 0 is past the screen edges, 1 is the hole around the shooter.")]
+    private AnimationCurve hitScreenIn = new AnimationCurve(new Keyframe(0f, 0f, 0f, 2.5f), new Keyframe(1f, 1f, 0f, 0f));
+    [SerializeField, Min(0.01f), Tooltip("Real-time seconds the red takes to leave past the edges after the restart tap.")]
+    private float hitScreenOutDuration = 0.3f;
+    [SerializeField, Tooltip("How closed the red is while it leaves: starts at 1 around the shooter, ends at 0 past the edges.")]
+    private AnimationCurve hitScreenOut = new AnimationCurve(new Keyframe(0f, 1f, 0f, 0f), new Keyframe(1f, 0f, -2.5f, 0f));
     [SerializeField] private Color red = new Color(0.85f, 0.04f, 0.04f);
     [SerializeField] private Color yellow = new Color(1f, 0.86f, 0.1f);
+
+    // Feet to hat top of a gunman, metres.
+    private const float ShooterHeight = 1.95f;
 
     private static GameSession instance;
 
@@ -41,10 +50,14 @@ public sealed class GameSession : MonoBehaviour
     private Text scoreText;
     private Text messageText;
     private JaggedHole hitScreen;
+    private float openHoleRadius;
+    private float closedHoleRadius;
+    private float leaveTime = float.PositiveInfinity;
 
-    public static void ReportPlayerHit(Vector3 point)
+    // Shooter is the enemy whose bullet hit; the hit screen closes on him.
+    public static void ReportPlayerHit(Vector3 point, Transform shooter)
     {
-        if (instance != null && !instance.isOver) instance.EndRun();
+        if (instance != null && !instance.isOver) instance.EndRun(shooter);
     }
 
     public static void ReportDodge(float missDistance)
@@ -94,36 +107,70 @@ public sealed class GameSession : MonoBehaviour
         }
 
         float age = now - endTime;
-        // Pistol Whip-style hit: flat red floods the screen and a jagged hole onto the street closes in.
-        float closing = 1f - Mathf.Pow(1f - Mathf.Clamp01(age / hitHoleCloseDuration), 3f);
-        hitScreen.HoleRadius = Mathf.Lerp(hitHoleRadius.x, hitHoleRadius.y, closing);
-        messageText.text = age >= restartDelay ? $"{deathMessage}\n<size=40>tap to try again</size>" : deathMessage;
-        messageText.color = Color.white;
-
+        bool leaving = now >= leaveTime;
         bool tapped = Pointer.current != null && Pointer.current.press.wasPressedThisFrame;
-        if ((age >= restartDelay && tapped) || age >= autoRestartDelay)
+        // Only the player's tap restarts the run.
+        if (!leaving && age >= restartDelay && tapped)
+        {
+            leaveTime = now;
+            leaving = true;
+        }
+
+        // Pistol Whip-style hit: the red comes in from the screen edges and closes on the shooter,
+        // and on restart it leaves the same way.
+        float closed = leaving
+            ? hitScreenOut.Evaluate(Mathf.Clamp01((now - leaveTime) / hitScreenOutDuration))
+            : hitScreenIn.Evaluate(Mathf.Clamp01(age / hitScreenInDuration));
+        // Radii far past the edges change nothing on screen, so the curve runs on a log scale.
+        hitScreen.HoleRadius = Mathf.Exp(Mathf.LerpUnclamped(Mathf.Log(openHoleRadius), Mathf.Log(closedHoleRadius), closed));
+        messageText.text = age >= restartDelay ? $"{deathMessage}\n<size=40>tap to try again</size>" : deathMessage;
+        messageText.color = leaving ? Color.clear : Color.white;
+
+        if (leaving && now - leaveTime >= hitScreenOutDuration)
             SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
     }
 
-    private void EndRun()
+    private void EndRun(Transform shooter)
     {
         isOver = true;
         endTime = Time.unscaledTime;
-        hitScreen.HoleRadius = hitHoleRadius.x;
+        // The hole closes on the shooter: centred between his feet and hat, sized to his height on screen.
+        Vector2 centre = new Vector2(0.5f, 0.5f);
+        closedHoleRadius = Mathf.Max(0.01f, minShooterHole);
+        var view = Camera.main;
+        if (view != null && shooter != null)
+        {
+            // He steps back to where he fired from, so the hole opens there and not behind his cover.
+            var gunman = shooter.GetComponent<EnemyGunman>();
+            Vector3 stand = gunman != null ? gunman.ShootingPosition : shooter.position;
+            Vector3 feet = view.WorldToViewportPoint(stand);
+            Vector3 hat = view.WorldToViewportPoint(stand + Vector3.up * ShooterHeight);
+            if (feet.z > 0f && hat.z > 0f)
+            {
+                centre = Vector2.Lerp(feet, hat, 0.5f);
+                centre = new Vector2(Mathf.Clamp(centre.x, 0.05f, 0.95f), Mathf.Clamp(centre.y, 0.05f, 0.95f));
+                closedHoleRadius = Mathf.Max(closedHoleRadius, Mathf.Abs(hat.y - feet.y) * shooterHoleScale);
+            }
+            ShotEffects.Spotlight(shooter);
+        }
+        hitScreen.HoleCentre = centre;
+        openHoleRadius = Mathf.Max(hitScreen.ClearRadius, closedHoleRadius);
+        hitScreen.HoleRadius = openHoleRadius;
         hitScreen.enabled = true;
-        // The killing bullet hangs in the middle of the hole, so the message moves below it.
-        Stretch(messageText.rectTransform, new Vector2(0.05f, 0.04f), new Vector2(0.95f, 0.3f));
-        // The time controller would answer the player's flinch with normal speed; the death shot stays in slow motion.
+        // The message takes the half of the screen the hole leaves free.
+        if (centre.y < 0.45f) Stretch(messageText.rectTransform, new Vector2(0.05f, 0.66f), new Vector2(0.95f, 0.88f));
+        else Stretch(messageText.rectTransform, new Vector2(0.05f, 0.04f), new Vector2(0.95f, 0.3f));
+        // Time stops: the player no longer runs on, and the time controller cannot answer the flinch.
         foreach (var controller in FindObjectsByType<TimeScaleController>(FindObjectsSortMode.None))
             controller.enabled = false;
         foreach (var dodge in FindObjectsByType<PlayerTiltDodge>(FindObjectsSortMode.None))
             dodge.enabled = false;
-        Time.timeScale = deathTimeScale;
+        Time.timeScale = 0f;
     }
 
     private void OnDestroy()
     {
-        // Scene reloads must not inherit the death slow motion if no controller takes over.
+        // Scene reloads must not inherit the stopped time of a death if no controller takes over.
         if (isOver) Time.timeScale = 1f;
     }
 

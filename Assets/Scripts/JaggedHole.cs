@@ -12,7 +12,20 @@ public sealed class JaggedHole : MaskableGraphic
     private float notchDepth = 0.5f;
     [SerializeField, Min(0f), Tooltip("Radius of the ray tips, in rect heights.")]
     private float holeRadius = 0.5f;
+    [SerializeField, Tooltip("Hole centre within the rect: 0 is the left or bottom edge, 1 the right or top.")]
+    private Vector2 holeCentre = new Vector2(0.5f, 0.5f);
     [SerializeField] private int seed = 9;
+
+    public Vector2 HoleCentre
+    {
+        get => holeCentre;
+        set
+        {
+            if (holeCentre == value) return;
+            holeCentre = value;
+            SetVerticesDirty();
+        }
+    }
 
     public float HoleRadius
     {
@@ -26,14 +39,32 @@ public sealed class JaggedHole : MaskableGraphic
         }
     }
 
+    // Tip radius at which even the deepest notch lies past every corner, so no colour shows at all.
+    public float ClearRadius
+    {
+        get
+        {
+            Rect rect = rectTransform.rect;
+            float aspect = rect.height > 0f ? rect.width / rect.height : 1f;
+            float farthest = 0f;
+            for (int corner = 0; corner < 4; corner++)
+            {
+                var offset = new Vector2(((corner & 1) - holeCentre.x) * aspect, (corner >> 1) - holeCentre.y);
+                farthest = Mathf.Max(farthest, offset.magnitude);
+            }
+            return farthest / (notchDepth * 0.8f) * 1.05f;
+        }
+    }
+
     protected override void OnPopulateMesh(VertexHelper vh)
     {
         vh.Clear();
         Rect rect = GetPixelAdjustedRect();
-        Vector2 centre = rect.center;
+        Vector2 centre = rect.min + Vector2.Scale(rect.size, holeCentre);
         float tip = holeRadius * rect.height;
-        // The outer edge lies past the corners, so the strip between it and the star covers the whole rect.
-        float outer = rect.size.magnitude;
+        // The outer edge lies past the corners from any centre and past the longest ray,
+        // so the strip between it and the star covers the rect.
+        float outer = Mathf.Max(rect.size.magnitude, tip * 1.3f);
         int points = Mathf.Max(3, rays) * 2;
         float step = 2f * Mathf.PI / points;
         var random = new System.Random(seed);

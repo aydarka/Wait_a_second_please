@@ -48,6 +48,7 @@ public sealed class ShotEffects : MonoBehaviour
     private readonly List<Vector4> ringShapes = new List<Vector4>(new Vector4[RingCapacity * 4]);
     private readonly List<Vector4> ringLives = new List<Vector4>(new Vector4[RingCapacity * 4]);
     private readonly List<Vector4> ringGrowth = new List<Vector4>(new Vector4[RingCapacity * 4]);
+    private readonly int[] ringOwners = new int[RingCapacity];
     private int nextRing;
     private int ringSeed;
     private bool ringsDirty;
@@ -59,16 +60,31 @@ public sealed class ShotEffects : MonoBehaviour
     private readonly List<Vector2> starPoints = new List<Vector2>();
     private readonly List<AimGlint> glints = new List<AimGlint>();
     private readonly List<Flash> flashes = new List<Flash>();
+    private EnemyGunman steppingShooter;
     private Color red = new Color(0.89f, 0.09f, 0.04f);
     private Color yellow = new Color(0.95f, 0.76f, 0.11f);
     private Color black = Color.black;
 
-    // Leaves a ring across the flight path; birthTime is in Time.time (game) seconds.
-    public static void AddRing(Vector3 centre, Vector3 direction, float radius, float lineWidth,
+    // Leaves a ring across the flight path; birthTime is in Time.time (game) seconds, owner identifies the shot.
+    public static void AddRing(int owner, Vector3 centre, Vector3 direction, float radius, float lineWidth,
         float strength, float birthTime, float lifetime, float openTime)
     {
         var effects = Current;
-        if (effects != null) effects.PutRing(centre, direction, radius, lineWidth, strength, birthTime, lifetime, openTime);
+        if (effects != null) effects.PutRing(owner, centre, direction, radius, lineWidth, strength, birthTime, lifetime, openTime);
+    }
+
+    // Removes every ring a shot has left.
+    public static void ClearRings(int owner)
+    {
+        if (instance != null) instance.RemoveRings(owner);
+    }
+
+    // Death: the world goes black and only the shooter stays, drawn as a flat silhouette on top.
+    // Though time has stopped, he steps out to where he fired from, gun raised over the shoulder.
+    public static void Spotlight(Transform shooter)
+    {
+        var effects = Current;
+        if (effects != null && shooter != null) effects.ShowSpotlight(shooter);
     }
 
     private static ShotEffects Current
@@ -104,6 +120,15 @@ public sealed class ShotEffects : MonoBehaviour
         var effects = Current;
         if (effects == null || enemy == null || enemy.Muzzle == null) return;
         effects.flashes.Add(new Flash { Position = enemy.Muzzle.position, Born = Time.time, Seed = Random.Range(0, int.MaxValue) });
+    }
+
+    // The game clock stands still on the death screen, so the shooter walks on real time: his own side
+    // step or stand-up, ending where he fired from with the gun over the shoulder, because a gun levelled
+    // at the camera hides behind the body.
+    private void UpdateStepOut()
+    {
+        if (steppingShooter == null) return;
+        if (steppingShooter.StepToReadyPose(Time.unscaledDeltaTime)) steppingShooter = null;
     }
 
     private void Awake()
@@ -163,10 +188,11 @@ public sealed class ShotEffects : MonoBehaviour
         return mesh;
     }
 
-    private void PutRing(Vector3 centre, Vector3 direction, float radius, float lineWidth,
+    private void PutRing(int owner, Vector3 centre, Vector3 direction, float radius, float lineWidth,
         float strength, float birthTime, float lifetime, float openTime)
     {
         if (ringMesh == null || direction.sqrMagnitude <= 0f) return;
+        ringOwners[nextRing] = owner;
         Vector3 axis = direction.normalized;
         Vector3 side = Vector3.Cross(Vector3.up, axis);
         if (side.sqrMagnitude < 1e-6f) side = Vector3.Cross(Vector3.right, axis);
@@ -189,6 +215,65 @@ public sealed class ShotEffects : MonoBehaviour
         ringsDirty = true;
     }
 
+    private void RemoveRings(int owner)
+    {
+        for (int ring = 0; ring < RingCapacity; ring++)
+        {
+            if (ringOwners[ring] != owner) continue;
+            ringOwners[ring] = 0;
+            for (int corner = 0; corner < 4; corner++)
+                ringLives[ring * 4 + corner] = new Vector4(-1e6f, 1f, 0f, 0f);
+            ringsDirty = true;
+        }
+    }
+
+    private void ShowSpotlight(Transform shooter)
+    {
+        var gunman = shooter.GetComponent<EnemyGunman>();
+        if (gunman != null)
+        {
+            gunman.enabled = false;
+            steppingShooter = gunman;
+        }
+
+        var blackout = Resources.Load<Material>("ShotBlackout");
+        var killer = Resources.Load<Material>("ShotKiller");
+        var view = Camera.main;
+        if (blackout == null || killer == null || view == null)
+        {
+            Debug.LogError("ShotEffects needs the ShotBlackout and ShotKiller materials in a Resources folder and a main camera.", this);
+            return;
+        }
+
+        // A black card just past the near plane hides the world; it draws after everything else in the scene.
+        float distance = view.nearClipPlane * 1.5f;
+        float halfHeight = distance * Mathf.Tan(view.fieldOfView * 0.5f * Mathf.Deg2Rad) * 1.5f;
+        float halfWidth = halfHeight * view.aspect;
+        var card = new GameObject("Blackout", typeof(MeshFilter), typeof(MeshRenderer));
+        card.transform.SetParent(view.transform, false);
+        card.transform.localPosition = new Vector3(0f, 0f, distance);
+        var mesh = new Mesh { name = "Blackout" };
+        mesh.SetVertices(new List<Vector3>
+        {
+            new Vector3(-halfWidth, -halfHeight, 0f), new Vector3(halfWidth, -halfHeight, 0f),
+            new Vector3(halfWidth, halfHeight, 0f), new Vector3(-halfWidth, halfHeight, 0f)
+        });
+        mesh.SetTriangles(new[] { 0, 1, 2, 0, 2, 3 }, 0);
+        card.GetComponent<MeshFilter>().sharedMesh = mesh;
+        var cardRenderer = card.GetComponent<MeshRenderer>();
+        cardRenderer.sharedMaterial = blackout;
+        cardRenderer.shadowCastingMode = ShadowCastingMode.Off;
+
+        // The shooter is drawn once more over the card where it is not hidden behind cover.
+        foreach (var part in shooter.GetComponentsInChildren<Renderer>())
+        {
+            var materials = part.sharedMaterials;
+            System.Array.Resize(ref materials, materials.Length + 1);
+            materials[materials.Length - 1] = killer;
+            part.sharedMaterials = materials;
+        }
+    }
+
     private void UploadRings()
     {
         ringMesh.SetVertices(ringPositions);
@@ -200,6 +285,7 @@ public sealed class ShotEffects : MonoBehaviour
     private void LateUpdate()
     {
         Shader.SetGlobalFloat(ShotTimeId, Time.time);
+        UpdateStepOut();
         var view = Camera.main;
         Vector3 focus = view != null ? view.transform.position : Vector3.zero;
         if (ringsDirty)
