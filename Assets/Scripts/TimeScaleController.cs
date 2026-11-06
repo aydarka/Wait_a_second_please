@@ -1,7 +1,10 @@
+using System;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-// Time barely moves while the device is still, follows how fast it is tilted, and runs normally while the screen is held.
+// Time barely moves while the device is still, follows how fast it is tilted, and runs normally while the screen is held
+// or while game code holds normal time (the player's counter-shot in flight, as in Superhot).
 [DisallowMultipleComponent]
 public sealed class TimeScaleController : MonoBehaviour
 {
@@ -18,6 +21,8 @@ public sealed class TimeScaleController : MonoBehaviour
     [SerializeField, Min(0f), Tooltip("Real-time duration of a full transition from normal back to slow speed.")]
     private float slowDownDuration = 0.35f;
 
+    private static readonly HashSet<object> normalTimeHolders = new HashSet<object>();
+    private static readonly Predicate<object> IsDestroyed = holder => holder is UnityEngine.Object unityObject && unityObject == null;
     private static float flowSlowScale;
     private static float flowNormalScale = 1f;
 
@@ -29,11 +34,32 @@ public sealed class TimeScaleController : MonoBehaviour
     // Derived from the actual time scale so scripted slow motion (the death shot) reads as slow too.
     public static float Flow => Mathf.InverseLerp(flowSlowScale, flowNormalScale, Time.timeScale);
 
+    // Runs time at normal speed, like holding the screen, until the same requester releases it.
+    // Holding twice is harmless; a destroyed Unity object releases itself; a scene reload clears every hold.
+    public static void HoldNormalTime(object requester)
+    {
+        if (requester != null) normalTimeHolders.Add(requester);
+    }
+
+    // Lets time settle back to the tilt-driven speed (over slowDownDuration) once no one else holds it. Safe without a hold.
+    public static void ReleaseNormalTime(object requester)
+    {
+        if (requester != null) normalTimeHolders.Remove(requester);
+    }
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetStatics()
+    {
+        normalTimeHolders.Clear();
+    }
+
     private void OnEnable()
     {
         previousTimeScale = Time.timeScale;
         Time.timeScale = Mathf.Max(0f, slowTimeScale);
         flow = 0f;
+        // A new controller means a new run: holds left over from the previous scene no longer apply.
+        normalTimeHolders.Clear();
         TiltInput.Recalibrate();
     }
 
@@ -51,6 +77,9 @@ public sealed class TimeScaleController : MonoBehaviour
         }
         // With the vertical dodge off, tilting the top edge does nothing, so it must not run time either.
         float tiltSpeed = ControlOptions.VerticalDodge ? TiltInput.AngularSpeed : TiltInput.RollSpeed;
+
+        if (normalTimeHolders.Count > 0) normalTimeHolders.RemoveWhere(IsDestroyed);
+        isHeld |= normalTimeHolders.Count > 0;
 
         float targetFlow = isHeld ? 1f : Mathf.Pow(
             Mathf.InverseLerp(tiltDeadZone, Mathf.Max(tiltDeadZone + 0.01f, fullSpeedTiltRate), tiltSpeed),
