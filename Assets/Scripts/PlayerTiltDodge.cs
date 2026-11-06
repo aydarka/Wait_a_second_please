@@ -37,7 +37,8 @@ public sealed class PlayerTiltDodge : MonoBehaviour
     {
         Vector2 tilt = TiltInput.Angles;
         float side = Mathf.Clamp(tilt.x / Mathf.Max(0.01f, maxRollAngle), -1f, 1f);
-        float vertical = Mathf.Clamp(tilt.y / Mathf.Max(0.01f, maxPitchAngle), -1f, 1f);
+        // ControlOptions.VerticalDodge switches ducking and rising off entirely.
+        float vertical = ControlOptions.VerticalDodge ? Mathf.Clamp(tilt.y / Mathf.Max(0.01f, maxPitchAngle), -1f, 1f) : 0f;
         if (invertVertical) vertical = -vertical;
         Vector2 target = new Vector2(
             side * maxSideOffset,

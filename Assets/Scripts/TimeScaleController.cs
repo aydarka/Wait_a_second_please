@@ -23,6 +23,7 @@ public sealed class TimeScaleController : MonoBehaviour
 
     private float previousTimeScale;
     private float flow;
+    private bool pressOnPanel;
 
     // 0 at the slow time scale, 1 at the normal one; drives slow-motion visuals.
     // Derived from the actual time scale so scripted slow motion (the death shot) reads as slow too.
@@ -40,10 +41,19 @@ public sealed class TimeScaleController : MonoBehaviour
     {
         float slowScale = Mathf.Max(0f, slowTimeScale);
         float normalScale = Mathf.Max(slowScale, normalTimeScale);
-        bool isHeld = Application.isFocused && Pointer.current != null && Pointer.current.press.isPressed;
+        var pointer = Pointer.current;
+        bool isHeld = false;
+        if (Application.isFocused && pointer != null)
+        {
+            // A press on the controls menu is a menu tap, not a request for normal time.
+            if (pointer.press.wasPressedThisFrame) pressOnPanel = ControlsPanel.Covers(pointer.position.ReadValue());
+            isHeld = pointer.press.isPressed && !pressOnPanel;
+        }
+        // With the vertical dodge off, tilting the top edge does nothing, so it must not run time either.
+        float tiltSpeed = ControlOptions.VerticalDodge ? TiltInput.AngularSpeed : TiltInput.RollSpeed;
 
         float targetFlow = isHeld ? 1f : Mathf.Pow(
-            Mathf.InverseLerp(tiltDeadZone, Mathf.Max(tiltDeadZone + 0.01f, fullSpeedTiltRate), TiltInput.AngularSpeed),
+            Mathf.InverseLerp(tiltDeadZone, Mathf.Max(tiltDeadZone + 0.01f, fullSpeedTiltRate), tiltSpeed),
             Mathf.Max(0.01f, tiltResponseExponent));
 
         // Speed up almost instantly so a sharp tilt is felt, but let time settle back gradually.

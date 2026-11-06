@@ -8,14 +8,12 @@ using UnityEngine.UI;
 public sealed class GameSession : MonoBehaviour
 {
     [SerializeField] private Transform player;
-    [SerializeField, Tooltip("Tilt controls need a fixed orientation: auto-rotation would turn the screen mid-dodge.")]
-    private ScreenOrientation orientation = ScreenOrientation.LandscapeLeft;
     [SerializeField] private string title = "WAIT A SECOND, PLEASE";
     [SerializeField] private string deathMessage = "TOO LATE";
     [SerializeField, Min(0f), Tooltip("Real-time seconds the title stays on screen.")]
     private float titleDuration = 3f;
-    [SerializeField, Min(0f), Tooltip("Misses closer than this, in metres, flash a near-miss message.")]
-    private float nearMissDistance = 0.9f;
+    [SerializeField, Min(0f), Tooltip("Misses closer than this, in metres, are a close one: the message flashes and the player fires back.")]
+    private float closeDistance = 0.6f;
     [SerializeField, Min(0f), Tooltip("Real-time seconds before a tap restarts the run.")]
     private float restartDelay = 1.2f;
 
@@ -60,18 +58,19 @@ public sealed class GameSession : MonoBehaviour
         if (instance != null && !instance.isOver) instance.EndRun(shooter);
     }
 
-    public static void ReportDodge(float missDistance)
+    // True for a close one: the message flashes and the player fires back at the shooter.
+    public static bool ReportDodge(float missDistance)
     {
-        if (instance == null || instance.isOver) return;
+        if (instance == null || instance.isOver) return false;
         instance.dodged++;
-        if (missDistance <= instance.nearMissDistance)
-            instance.nearMissTime = Time.unscaledTime;
+        if (missDistance > instance.closeDistance) return false;
+        instance.nearMissTime = Time.unscaledTime;
+        return true;
     }
 
     private void Awake()
     {
         if (player == null && Camera.main != null) player = Camera.main.transform;
-        if (Application.isMobilePlatform) Screen.orientation = orientation;
         BuildHud();
     }
 
@@ -108,8 +107,9 @@ public sealed class GameSession : MonoBehaviour
 
         float age = now - endTime;
         bool leaving = now >= leaveTime;
-        bool tapped = Pointer.current != null && Pointer.current.press.wasPressedThisFrame;
-        // Only the player's tap restarts the run.
+        var pointer = Pointer.current;
+        bool tapped = pointer != null && pointer.press.wasPressedThisFrame && !ControlsPanel.Covers(pointer.position.ReadValue());
+        // Only the player's tap restarts the run; a tap on the controls menu belongs to the menu.
         if (!leaving && age >= restartDelay && tapped)
         {
             leaveTime = now;
