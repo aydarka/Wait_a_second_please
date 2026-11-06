@@ -166,6 +166,7 @@ MonoBehaviour:
   pavementWidth: 3
   pavementHeight: 0.15
   clearLane: 2.5
+  coverLayerName: StreetCover
   buildingHeight: {x: 10, y: 30}
   buildingDepth: {x: 8, y: 16}
   setbackChance: 0.4
@@ -177,6 +178,11 @@ MonoBehaviour:
   firstFloor: 3.5
   parkedCarChance: 0.45
   abandonedCarShare: 0.25
+  carHoodAndBootCentre: {x: 1.4, y: -1.8}
+  carHoodAndBootHeight: {x: 1.11, y: 0.96}
+  carHoodAndBootLength: {x: 1.6, y: 0.8}
+  abandonedCarAngle: {x: 60, y: 80}
+  carEdgeStep: 1.4
   barrierChance: 0.2
   doorChance: 0.35
   balconyChance: 0.4
@@ -478,16 +484,80 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GameSession
   player: {fileID: 1115829321}
-  orientation: 3
   title: WAIT A SECOND, PLEASE
   deathMessage: TOO LATE
   titleDuration: 3
-  nearMissDistance: 0.9
-  deathTimeScale: 0.05
   restartDelay: 1.2
-  autoRestartDelay: 4
-  hitHoleRadius: {x: 0.75, y: 0.17}
-  hitHoleCloseDuration: 0.45
+  shooterHoleScale: 1.4
+  minShooterHole: 0.1
+  hitScreenInDuration: 0.35
+  hitScreenIn:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0
+      inSlope: 0
+      outSlope: 2.5
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    - serializedVersion: 3
+      time: 1
+      value: 1
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  hitScreenOutDuration: 0.3
+  hitScreenOut:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 1
+      inSlope: 5.8862586
+      outSlope: 5.8862586
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0.1330457
+    - serializedVersion: 3
+      time: 0.09793109
+      value: 0.9947351
+      inSlope: -1.8179147
+      outSlope: -1.8179147
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.09000012
+    - serializedVersion: 3
+      time: 0.34826487
+      value: 0.91823554
+      inSlope: -0.5301974
+      outSlope: -0.5301974
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    - serializedVersion: 3
+      time: 1
+      value: 0
+      inSlope: -2.5
+      outSlope: -2.5
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
   red: {r: 0.85, g: 0.04, b: 0.04, a: 1}
   yellow: {r: 1, g: 0.86, b: 0.1, a: 1}
 --- !u!4 &1277059558
@@ -540,8 +610,33 @@ MonoBehaviour:
   spawnDistance: 50
   spotWindow: 10
   initialDelay: 3
-  minSpawnInterval: 3
-  maxSpawnInterval: 5
+  stages:
+  - Distance: 0
+    Interval: {x: 3.5, y: 4.5}
+    PairChance: 0
+    Shooters: 1
+    HiddenTime: {x: 1, y: 1.5}
+    EngageDistance: 38
+  - Distance: 40
+    Interval: {x: 2.6, y: 3.4}
+    PairChance: 0
+    Shooters: 2
+    HiddenTime: {x: 1, y: 1.5}
+    EngageDistance: 38
+  - Distance: 120
+    Interval: {x: 1.9, y: 2.6}
+    PairChance: 0.25
+    Shooters: 2
+    HiddenTime: {x: 0.7, y: 1.1}
+    EngageDistance: 40
+  - Distance: 250
+    Interval: {x: 1.4, y: 2}
+    PairChance: 0.45
+    Shooters: 3
+    HiddenTime: {x: 0.3, y: 0.6}
+    EngageDistance: 44
+  breatherEvery: 80
+  breatherLength: 2.5
   groundHeight: 0
   groundOffset: {x: 2.5, y: 5}
   ledgeOffset: 6
@@ -608,8 +703,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::TimeScaleController
   slowTimeScale: 0.03
   normalTimeScale: 1
-  tiltDeadZone: 6
-  fullSpeedTiltRate: 120
+  tiltDeadZone: 5
+  fullSpeedTiltRate: 20
   tiltResponseExponent: 1.5
   transitionDuration: 0.08
   slowDownDuration: 0.35

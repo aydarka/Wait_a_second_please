@@ -89,6 +89,10 @@ public sealed class EnemyGunman : MonoBehaviour
 
     private static int engagedShooters;
 
+    // Enemies allowed to aim and shoot at once across the street, set by EnemySpawner as the run gets harder;
+    // 0 leaves each enemy's own limit.
+    public static int ShooterLimit { get; set; }
+
     private Transform target;
     private CameraMovement runner;
     private Transform muzzle;
@@ -127,6 +131,14 @@ public sealed class EnemyGunman : MonoBehaviour
     public float AimProgress => state == State.Aiming && aimDuration > 0f ? 1f - stateTimer / aimDuration
         : state == State.Firing ? 1f : 0f;
     public bool IsDead => state == State.Dead;
+
+    // Set by EnemySpawner before activating a pooled enemy: time in cover between shots (min, max), game seconds,
+    // and the distance at which it starts showing itself.
+    public void SetPace(Vector2 hiddenSeconds, float startDistance)
+    {
+        hiddenTime = new Vector2(Mathf.Max(0f, hiddenSeconds.x), Mathf.Max(hiddenSeconds.x, hiddenSeconds.y));
+        engageDistance = Mathf.Max(minFireDistance, startDistance);
+    }
     // Where the player's answering bullet should go: the chest in the current pose.
     public Vector3 TargetPoint => configurationValid ? spine.position : transform.position + Vector3.up * exposedMuzzleHeight;
 
@@ -216,7 +228,11 @@ public sealed class EnemyGunman : MonoBehaviour
     }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-    private static void ResetShooters() => engagedShooters = 0;
+    private static void ResetShooters()
+    {
+        engagedShooters = 0;
+        ShooterLimit = 0;
+    }
 
     private void Awake()
     {
@@ -505,7 +521,7 @@ public sealed class EnemyGunman : MonoBehaviour
     private bool TakeShooterSlot()
     {
         if (holdsShooterSlot) return true;
-        if (engagedShooters >= maxSimultaneousShooters) return false;
+        if (engagedShooters >= (ShooterLimit > 0 ? ShooterLimit : maxSimultaneousShooters)) return false;
         engagedShooters++;
         holdsShooterSlot = true;
         return true;
