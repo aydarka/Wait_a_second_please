@@ -128,6 +128,7 @@ public sealed class EnemyGunman : MonoBehaviour
     private float recoil;
     private int shotsLeft;
     private int burstsFired;
+    private int burstsBeforeHold;
     private bool holdsShooterSlot;
     private Vector3 deathPivot;
     private Quaternion deathStartRotation;
@@ -149,15 +150,26 @@ public sealed class EnemyGunman : MonoBehaviour
     // Where the player's answering bullet should go: the chest in the current pose.
     public Vector3 TargetPoint => configurationValid ? spine.position : transform.position + Vector3.up * exposedMuzzleHeight;
 
-    // The player has answered this enemy's shot: it stops hiding and shooting, comes back out with its own
-    // step or stand-up if it already ducked, and stays in the open, gun over the shoulder, until Die.
+    // The player may answer this enemy's shot: it stops hiding and shooting, comes back out with its own
+    // step or stand-up if it already ducked, and stays in the open, gun over the shoulder, until Die
+    // or ReleaseExposed.
     public void HoldExposed()
     {
         if (!configurationValid || state == State.Dead || state == State.Held) return;
         state = State.Held;
         shotsLeft = 0;
+        burstsBeforeHold = burstsFired;
         burstsFired = Mathf.Max(burstsFired, maxBursts);
         ReleaseShooterSlot();
+    }
+
+    // The player missed the chance to answer: the enemy goes back into cover and carries on as before,
+    // showing itself again for the shots it has left. Does nothing unless held by HoldExposed.
+    public void ReleaseExposed()
+    {
+        if (!configurationValid || state != State.Held) return;
+        burstsFired = burstsBeforeHold;
+        state = State.Hiding;
     }
 
     // The agreed death, in game time: knocked back along the shot, a red splash behind the silhouette,
@@ -452,9 +464,9 @@ public sealed class EnemyGunman : MonoBehaviour
     {
         while (shotsLeft > 0 && stateTimer <= 0f)
         {
-            // Something moved into the way (or the spot shoots into its own cover): no bullet through walls,
-            // and none from beyond the screen edge.
-            if (!LineOfFireClear(muzzle.position, target.position) || !MuzzleOnScreen())
+            // None from beyond the screen edge. Cover that came into the way is no reason to hold fire: the
+            // player tilted behind it, and the bullet strikes it in sparks (Projectile stops on cover).
+            if (!MuzzleOnScreen())
             {
                 shotsLeft = 0;
                 break;
