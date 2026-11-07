@@ -17,6 +17,8 @@ public class Projectile : MonoBehaviour
     private Vector2 dodgeFrame = new Vector2(25f, 30f);
     [SerializeField, Min(0f), Tooltip("Distance behind the player after which a missed bullet returns to the pool.")]
     private float flyByDistance = 6f;
+    [SerializeField, Tooltip("Colliders that stop the bullet: it ends in sparks where its path meets one. Nothing set uses the StreetCover layer.")]
+    private LayerMask blockers;
 
     [SerializeField] private AirRingTrail rings = new AirRingTrail();
 
@@ -37,6 +39,11 @@ public class Projectile : MonoBehaviour
     private Renderer body;
     // The player's eyes at this bullet's last move: a bullet and the eyes it is judged against are from one moment.
     private Vector3 eyesSeen;
+    // Where along its path the bullet strikes cover, metres from the muzzle; infinity when the way is clear.
+    private float coverDistance = float.PositiveInfinity;
+    private Vector3 coverNormal;
+
+    private const string DefaultBlockerLayer = "StreetCover";
 
     public float ZSpeed => Mathf.Max(0.01f, speed);
     // A bullet in the frame at the eyes hits when it passes this close to them, metres.
@@ -49,6 +56,8 @@ public class Projectile : MonoBehaviour
     // (the fly-by by the ear). HitPlayer: the bullet that ends the run, as it reaches the eyes.
     public static event Action<Projectile, bool> PassedPlayer;
     public static event Action<Projectile> HitPlayer;
+    // HitCover: a bullet struck cover on its way (at that point) and ended there in sparks.
+    public static event Action<Projectile, Vector3> HitCover;
 
     // True while any enemy bullet is still on its way to the player, i.e. there is still something to dodge.
     public static bool AnyApproaching => approaching.Count > 0;
@@ -76,6 +85,7 @@ public class Projectile : MonoBehaviour
         approaching.Clear();
         PassedPlayer = null;
         HitPlayer = null;
+        HitCover = null;
     }
 
     public void Launch(Vector3 targetPosition, float duration, PrefabPool pool)
@@ -102,6 +112,16 @@ public class Projectile : MonoBehaviour
         passedPlayer = false;
         var view = Camera.main;
         eyesSeen = view != null ? view.transform.position : launchPosition;
+        // The path is a straight line fixed at launch, so one look along it finds the cover it will strike.
+        // Until it strikes, the bullet is a threat like any other.
+        coverDistance = float.PositiveInfinity;
+        if (blockers.value == 0) blockers = LayerMask.GetMask(DefaultBlockerLayer);
+        if (blockers.value != 0 &&
+            Physics.Linecast(launchPosition, destination, out RaycastHit hit, blockers, QueryTriggerInteraction.Ignore))
+        {
+            coverDistance = hit.distance;
+            coverNormal = hit.normal;
+        }
         approaching.Add(this);
     }
 
@@ -122,8 +142,14 @@ public class Projectile : MonoBehaviour
             transform.position = destination + velocity * (elapsedFlightTime - flightDuration);
             transform.localScale = initialScale * Mathf.Max(1f, finalScaleMultiplier);
         }
-        rings.Emit(launchPosition, velocity, Vector3.Distance(launchPosition, transform.position),
+        float flown = Vector3.Distance(launchPosition, transform.position);
+        rings.Emit(launchPosition, velocity, Mathf.Min(flown, coverDistance),
             1f, Mathf.Max(1f, finalScaleMultiplier), meetingDistance);
+        if (flown >= coverDistance)
+        {
+            StrikeCover();
+            return;
+        }
 
         var player = Camera.main;
         if (player != null)
@@ -176,6 +202,17 @@ public class Projectile : MonoBehaviour
             // A close one: the player fires back at whoever sent this bullet.
             CounterShot.Fire(FindShooter());
         }
+    }
+
+    // The bullet ends on the cover in its way: sparks, no hit, no dodge. Leaving the approaching set lets the
+    // time control hold its slow-down a moment longer, so the sparks are seen before time picks up.
+    private void StrikeCover()
+    {
+        Vector3 point = launchPosition + velocity.normalized * coverDistance;
+        transform.position = point;
+        ShotEffects.CoverSparks(point, coverNormal, velocity);
+        HitCover?.Invoke(this, point);
+        Finish();
     }
 
     // A dodge: the fly-by hook, then the count; true for a close one the player answers.

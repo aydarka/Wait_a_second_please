@@ -3,7 +3,7 @@ using UnityEngine;
 using UnityEngine.Rendering;
 
 // Shot visuals that are not part of a bullet: the Matrix-style rings a bullet leaves hanging in the air,
-// the red aim glint on a levelling gun and the yellow muzzle flash.
+// the red aim glint on a levelling gun, the yellow muzzle flash and the sparks where a bullet strikes cover.
 // Created on first use, one per scene. Rings age in game time inside WaitASecond/ShotRings,
 // so once a ring is placed the CPU never touches it again.
 [DisallowMultipleComponent]
@@ -20,6 +20,17 @@ public sealed class ShotEffects : MonoBehaviour
     private const float LevelledAngle = 2f;
     private const float LateLevelProgress = 0.8f;
     private const float BoundsSize = 400f;
+    // Sparks where a bullet strikes cover: they play out over this much game time, but never in less real
+    // time than the minimum, so they still read when time runs almost normally.
+    private const float SparkGameSeconds = 0.6f;
+    private const float SparkMinRealSeconds = 0.4f;
+    private const int SparkCount = 14;
+    // Launch speed range, metres per second, and gravity a little stronger than Earth's so the fall reads.
+    private static readonly Vector2 SparkSpeed = new Vector2(5f, 10f);
+    private const float SparkGravity = 14.7f;
+    // A spark is drawn as the streak it would leave in this much time: long while fast, short at the top.
+    private const float SparkStreakSeconds = 0.035f;
+    private const float SparkFlashRadius = 0.15f;
 
     private static readonly int ShotTimeId = Shader.PropertyToID("_ShotTime");
     private static readonly Vector2[] Corners =
@@ -41,6 +52,21 @@ public sealed class ShotEffects : MonoBehaviour
 
         public float Age => (RealTime ? Time.unscaledTime : Time.time) - Born;
         public Vector3 WorldPosition => Anchor != null ? Anchor.TransformPoint(Position) : Position;
+    }
+
+    // A bullet stopped by cover: a small flash and yellow streaks thrown back off the surface.
+    private struct SparkBurst
+    {
+        public Vector3 Position;
+        public Vector3 Normal;
+        public Vector3 Incoming;
+        public float BornGame;
+        public float BornReal;
+        public int Seed;
+
+        // 0 to 1 over the burst; it lasts the game time or the minimum real time, whichever is longer.
+        public float Progress => Mathf.Min((Time.time - BornGame) / SparkGameSeconds,
+            (Time.unscaledTime - BornReal) / SparkMinRealSeconds);
     }
 
     // The raise from the waiting pose reads as lowering the gun, so the glint waits until it is levelled.
@@ -69,6 +95,7 @@ public sealed class ShotEffects : MonoBehaviour
     private readonly List<Vector2> starPoints = new List<Vector2>();
     private readonly List<AimGlint> glints = new List<AimGlint>();
     private readonly List<Flash> flashes = new List<Flash>();
+    private readonly List<SparkBurst> sparks = new List<SparkBurst>();
     private EnemyGunman steppingShooter;
     private Color red = new Color(0.89f, 0.09f, 0.04f);
     private Color yellow = new Color(0.95f, 0.76f, 0.11f);
@@ -145,6 +172,19 @@ public sealed class ShotEffects : MonoBehaviour
         {
             Position = view.transform.InverseTransformPoint(position), Anchor = view.transform, Radius = radius,
             Born = Time.unscaledTime, Duration = realSeconds, RealTime = true, Seed = Random.Range(0, int.MaxValue)
+        });
+    }
+
+    // Sparks where a bullet struck cover; normal is the surface's, incoming the bullet's direction of flight.
+    public static void CoverSparks(Vector3 position, Vector3 normal, Vector3 incoming)
+    {
+        var effects = Current;
+        if (effects == null) return;
+        effects.sparks.Add(new SparkBurst
+        {
+            Position = position, Normal = normal.sqrMagnitude > 0f ? normal.normalized : -incoming.normalized,
+            Incoming = incoming.normalized, BornGame = Time.time, BornReal = Time.unscaledTime,
+            Seed = Random.Range(0, int.MaxValue)
         });
     }
 
@@ -338,6 +378,11 @@ public sealed class ShotEffects : MonoBehaviour
             if (flashes[i].Age > flashes[i].Duration)
                 flashes.RemoveAt(i);
         }
+        for (int i = sparks.Count - 1; i >= 0; i--)
+        {
+            if (sparks[i].Progress >= 1f)
+                sparks.RemoveAt(i);
+        }
 
         inkVertices.Clear();
         inkColors.Clear();
@@ -353,6 +398,7 @@ public sealed class ShotEffects : MonoBehaviour
                 AddGlint(view.transform, glint.Anchor, closing, pixelAtOneMetre);
             }
             foreach (var flash in flashes) DrawFlash(view.transform, flash, pixelAtOneMetre);
+            foreach (var burst in sparks) DrawSparks(view.transform, burst, pixelAtOneMetre);
         }
         inkMesh.Clear();
         inkMesh.SetVertices(inkVertices);
@@ -409,6 +455,83 @@ public sealed class ShotEffects : MonoBehaviour
         }
         AddStar(centre, view.right, view.up, 2.2f * pixel, black);
         AddStar(centre, view.right, view.up, 0f, yellow);
+    }
+
+    // A small flash at the strike, gone in the first quarter, and a fan of yellow sparks with a black edge that
+    // fly out on arcs under gravity: up, slowing at the top, then falling. Each spark is a streak along its
+    // motion, long while fast and short at the top of its arc, and it shrinks to nothing at the end of its own
+    // life: no fading, the comic way.
+    private void DrawSparks(Transform view, SparkBurst burst, float pixelAtOneMetre)
+    {
+        float progress = Mathf.Clamp01(burst.Progress);
+        Vector3 centre = TowardViewer(view, burst.Position, pixelAtOneMetre, out float pixel);
+        Vector3 shift = centre - burst.Position;
+        var random = new System.Random(burst.Seed);
+
+        if (progress < 0.25f)
+        {
+            float outer = Mathf.Max(SparkFlashRadius * (1f - progress / 0.25f), 8f * pixel);
+            starPoints.Clear();
+            const int points = 10;
+            float step = 2f * Mathf.PI / points;
+            for (int i = 0; i < points; i++)
+            {
+                float angle = i * step + ((float)random.NextDouble() - 0.5f) * step * 0.6f;
+                float radius = outer * (i % 2 == 0 ? 0.7f + 0.5f * (float)random.NextDouble() : 0.3f);
+                starPoints.Add(new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius);
+            }
+            AddStar(centre, view.right, view.up, 2f * pixel, black);
+            AddStar(centre, view.right, view.up, 0f, yellow);
+        }
+
+        // Thrown back the way the bullet bounced and above all upwards: the bullet strikes the side of the cover
+        // that faces the shooter, so only sparks that fly up over it or past its edges reach the player's eyes.
+        Vector3 bounce = Vector3.Reflect(burst.Incoming, burst.Normal);
+        Vector3 spray = (bounce * 0.35f + burst.Normal * 0.15f + Vector3.up).normalized;
+        Vector3 gravity = Vector3.down * SparkGravity;
+        // The burst's own clock in game seconds: it runs with game time, or faster when time is almost still.
+        float clock = progress * SparkGameSeconds;
+        float baseHalfWidth = Mathf.Max(0.008f, 1.5f * pixel);
+        for (int i = 0; i < SparkCount; i++)
+        {
+            Vector3 jitter = new Vector3((float)random.NextDouble() - 0.5f, (float)random.NextDouble() - 0.5f,
+                (float)random.NextDouble() - 0.5f) * 1.2f;
+            Vector3 direction = (spray + jitter).normalized;
+            if (Vector3.Dot(direction, burst.Normal) < 0.1f) direction = (direction + burst.Normal * 0.6f).normalized;
+            Vector3 launch = direction * Mathf.Lerp(SparkSpeed.x, SparkSpeed.y, (float)random.NextDouble());
+            float life = SparkGameSeconds * Mathf.Lerp(0.6f, 1f, (float)random.NextDouble());
+            if (clock >= life) continue;
+
+            Vector3 position = burst.Position + shift + launch * clock + 0.5f * clock * clock * gravity;
+            Vector3 velocity = launch + gravity * clock;
+            float speed = velocity.magnitude;
+            // Shrinks to nothing over the last third of its life.
+            float size = 1f - Mathf.InverseLerp(life * 0.66f, life, clock);
+            float length = Mathf.Max(speed * SparkStreakSeconds, 3f * pixel) * size;
+            Vector3 along = speed > 1e-4f ? velocity / speed : direction;
+            Vector3 tail = position - along * length;
+            float halfWidth = baseHalfWidth * size;
+            if (length < 1e-4f || halfWidth < 1e-5f) continue;
+            AddStreak(view, tail, position, halfWidth + 1.5f * pixel * size, black);
+            AddStreak(view, tail, position, halfWidth, yellow);
+        }
+    }
+
+    // A flat line between two points, turned to face the camera.
+    private void AddStreak(Transform view, Vector3 from, Vector3 to, float halfWidth, Color color)
+    {
+        Vector3 along = to - from;
+        Vector3 side = Vector3.Cross(along, view.position - (from + to) * 0.5f);
+        if (side.sqrMagnitude < 1e-8f) return;
+        side = side.normalized * halfWidth;
+        Vector3 cap = along.normalized * halfWidth;
+        int first = inkVertices.Count;
+        AddVertex(from - side - cap, color);
+        AddVertex(from + side - cap, color);
+        AddVertex(to + side + cap, color);
+        AddVertex(to - side + cap, color);
+        AddTriangle(first, first + 1, first + 2);
+        AddTriangle(first, first + 2, first + 3);
     }
 
     private void AddStar(Vector3 centre, Vector3 right, Vector3 up, float grow, Color color)
