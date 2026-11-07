@@ -1,11 +1,12 @@
+using System;
 using UnityEngine;
 
-// The player's answer to a close dodge. The moment the dodge counts, the enemy who fired is held out of cover
-// and the player's pistol is drawn up from below the frame; once it is up the shot leaves its muzzle and flies
-// in game time with the same air rings as enemy shots. It always lands, and the enemy dies the moment it
-// arrives. As in Superhot the shot is an action, so time runs at normal speed while it flies, but only while
-// no enemy bullet is still coming at the player: another shot in the air keeps time in the player's hands,
-// so it can still be read and dodged.
+// The player's answer to a close dodge, played as one slow-motion beat: the enemy bullet slips past the ear,
+// the pistol comes up from below the frame and fires, all while time is held slow; only after the shot does
+// time pick up. The enemy who fired is held out of cover from the dodge on. The shot flies in game time with
+// the same air rings as enemy shots, always lands, and the enemy dies the moment it arrives. As in Superhot
+// the flight itself runs at normal speed in tilt time control, but only while no enemy bullet is still coming
+// at the player: another shot in the air keeps time in the player's hands, so it can still be read and dodged.
 [DisallowMultipleComponent]
 public sealed class CounterShot : MonoBehaviour
 {
@@ -19,14 +20,22 @@ public sealed class CounterShot : MonoBehaviour
     private float flashRadius = 0.16f;
     [SerializeField, Min(0f), Tooltip("Real-time seconds the muzzle flash stays on screen.")]
     private float flashSeconds = 0.18f;
+    [SerializeField, Min(0f), Tooltip("Real-time seconds the slow motion lasts after the shot leaves, so the flash and the kick read before time picks up.")]
+    private float slowAfterShot = 0.1f;
     [SerializeField, Min(0.01f), Tooltip("Bullet size at the muzzle relative to the model; it shrinks back to the model size at the enemy.")]
     private float launchScale = 2.5f;
     [SerializeField] private AirRingTrail rings = new AirRingTrail();
+
+    // Hooks for sound and effects: the shot leaves the muzzle (at that point); it reaches the enemy, who dies.
+    public static event Action<Vector3> Fired;
+    public static event Action<EnemyGunman> Landed;
 
     private EnemyGunman target;
     private PlayerGun gun;
     private Renderer[] parts;
     private bool launched;
+    private bool slowHeld;
+    private float launchedAt;
     private Vector3 launchPosition;
     private Vector3 initialScale;
     private float flown;
@@ -46,7 +55,15 @@ public sealed class CounterShot : MonoBehaviour
         Instantiate(prefab).Prepare(enemy);
     }
 
-    // The bullet waits unseen until the pistol is up.
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetStatics()
+    {
+        Fired = null;
+        Landed = null;
+    }
+
+    // The dodge has just counted: time is held slow while the bullet slips past and the pistol comes up.
+    // The shot waits unseen until the pistol is up.
     private void Prepare(EnemyGunman enemy)
     {
         target = enemy;
@@ -54,21 +71,23 @@ public sealed class CounterShot : MonoBehaviour
         parts = GetComponentsInChildren<Renderer>();
         SetVisible(false);
         rings.Restart();
+        HoldSlowMotion(true);
         gun = PlayerGun.Draw(this, enemy.TargetPoint);
     }
 
     private void Launch(Camera view)
     {
         launched = true;
+        launchedAt = Time.unscaledTime;
         launchPosition = gun != null
             ? gun.MuzzlePosition
             : view.ViewportToWorldPoint(new Vector3(hipOnScreen.x, hipOnScreen.y, hipDepth));
         flown = 0f;
-        HoldTimeWhileSafe();
         ShotEffects.PlayerFlash(view, launchPosition, flashRadius, flashSeconds);
         if (gun != null) gun.Kick();
         SetVisible(true);
         Place(launchPosition, target.TargetPoint - launchPosition, 0f);
+        Fired?.Invoke(launchPosition);
     }
 
     private void Update()
@@ -86,13 +105,16 @@ public sealed class CounterShot : MonoBehaviour
             if (view != null && (gun == null || gun.IsUp)) Launch(view);
             return;
         }
-        HoldTimeWhileSafe();
+        // The shot is out: a moment later the slow motion lets go.
+        if (slowHeld && Time.unscaledTime - launchedAt >= slowAfterShot) HoldSlowMotion(false);
+        if (!slowHeld) HoldTimeWhileSafe();
 
         Vector3 path = target.TargetPoint - launchPosition;
         float length = path.magnitude;
         flown += speed * Time.deltaTime;
         if (flown >= length)
         {
+            Landed?.Invoke(target);
             target.Die(path);
             Destroy(gameObject);
             return;
@@ -104,8 +126,17 @@ public sealed class CounterShot : MonoBehaviour
     // Landing, losing its target or a scene reload all end the shot here.
     private void OnDestroy()
     {
+        HoldSlowMotion(false);
         TimeScaleController.ReleaseNormalTime(this);
         PlayerGun.Holster(this);
+    }
+
+    // Slow motion from the dodge until just after the shot, in both time controls.
+    private void HoldSlowMotion(bool hold)
+    {
+        slowHeld = hold;
+        if (hold) TimeScaleController.HoldSlowMotion(this);
+        else TimeScaleController.ReleaseSlowMotion(this);
     }
 
     // Normal time while the shot flies, unless an enemy bullet is still on its way to the player. Once that

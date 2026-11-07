@@ -4,17 +4,40 @@ using UnityEngine;
 // ControlsPanel flips them in game, so a phone build does not need rebuilding to compare.
 public static class ControlOptions
 {
+    public enum TimeControlMode
+    {
+        // Time follows how fast the device is tilted and runs normally while the screen is held.
+        Tilt,
+        // Time follows how dangerous the incoming shots are; a sharp tilt wins back part of the slow-down, the tap does nothing.
+        Danger,
+    }
+
     // Smallest horizontal field of view on a portrait screen, in degrees, so enemies at the street sides stay in frame.
     public const float PortraitHorizontalFieldOfView = 50f;
 
+    private const string TimeControlKey = "Controls.TimeControl";
     private const string VerticalDodgeKey = "Controls.VerticalDodge";
     private const string PortraitKey = "Controls.Portrait";
 
     private static bool loaded;
+    private static TimeControlMode timeControl;
     private static bool verticalDodge;
     private static bool portrait;
 
-    // On: tilting the top edge towards or away ducks or raises the player and also drives time.
+    public static TimeControlMode TimeControl
+    {
+        get { Load(); return timeControl; }
+        set
+        {
+            Load();
+            if (timeControl == value) return;
+            timeControl = value;
+            PlayerPrefs.SetInt(TimeControlKey, (int)value);
+            PlayerPrefs.Save();
+        }
+    }
+
+    // On: tilting the top edge towards or away ducks or raises the player and, in Tilt time control, also drives time.
     // Off: that tilt does nothing at all, so adjusting the grip neither moves the player nor lets time run.
     public static bool VerticalDodge
     {
@@ -60,6 +83,9 @@ public static class ControlOptions
     {
         if (loaded) return;
         loaded = true;
+        timeControl = PlayerPrefs.GetInt(TimeControlKey, (int)TimeControlMode.Danger) == (int)TimeControlMode.Tilt
+            ? TimeControlMode.Tilt
+            : TimeControlMode.Danger;
         verticalDodge = PlayerPrefs.GetInt(VerticalDodgeKey, 1) != 0;
         portrait = PlayerPrefs.GetInt(PortraitKey, 0) != 0;
     }

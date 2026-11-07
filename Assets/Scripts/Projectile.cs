@@ -1,6 +1,9 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
+// Bullets move after the camera has run forward for the frame, so the eyes they see are from the same moment.
+[DefaultExecutionOrder(100)]
 public class Projectile : MonoBehaviour
 {
     [SerializeField, Min(0.01f), Tooltip("Speed along the world Z axis in metres per second.")]
@@ -31,16 +34,48 @@ public class Projectile : MonoBehaviour
     private PrefabPool owner;
     private bool isFlying;
     private bool passedPlayer;
+    private Renderer body;
+    // The player's eyes at this bullet's last move: a bullet and the eyes it is judged against are from one moment.
+    private Vector3 eyesSeen;
 
     public float ZSpeed => Mathf.Max(0.01f, speed);
+    // A bullet in the frame at the eyes hits when it passes this close to them, metres.
+    public float HitRadius => hitRadius;
+
+    // A dodged bullet that passes this close to the eyes or closer counts as a close one, metres.
+    public float CloseDistance => closeDistance;
+
+    // Hooks for sound and effects. PassedPlayer: a bullet went past the eyes without hitting, close or not
+    // (the fly-by by the ear). HitPlayer: the bullet that ends the run, as it reaches the eyes.
+    public static event Action<Projectile, bool> PassedPlayer;
+    public static event Action<Projectile> HitPlayer;
 
     // True while any enemy bullet is still on its way to the player, i.e. there is still something to dodge.
     public static bool AnyApproaching => approaching.Count > 0;
+    // The enemy bullets still on their way to the player. Read only; do not keep it across frames.
+    public static IReadOnlyCollection<Projectile> Approaching => approaching;
+
+    // How this bullet meets the player if he stays where he is now: game seconds until it reaches the plane of
+    // his eyes (he runs forward meanwhile), how far from his eyes it passes there, and whether it is still in
+    // the frame there. It hits exactly when inFrameAtEyes and missDistance <= HitRadius: the same rule and the
+    // same sums as the real crossing. False once the bullet is no longer coming at the player.
+    public bool PredictMeeting(Camera view, out float secondsToEyes, out float missDistance, out bool inFrameAtEyes)
+    {
+        if (isFlying && !passedPlayer && view != null &&
+            Meet(view, out secondsToEyes, out _, out missDistance, out inFrameAtEyes) && secondsToEyes >= 0f)
+            return true;
+        secondsToEyes = float.PositiveInfinity;
+        missDistance = float.PositiveInfinity;
+        inFrameAtEyes = false;
+        return false;
+    }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
     private static void ResetStatics()
     {
         approaching.Clear();
+        PassedPlayer = null;
+        HitPlayer = null;
     }
 
     public void Launch(Vector3 targetPosition, float duration, PrefabPool pool)
@@ -65,13 +100,14 @@ public class Projectile : MonoBehaviour
         owner = pool;
         isFlying = true;
         passedPlayer = false;
+        var view = Camera.main;
+        eyesSeen = view != null ? view.transform.position : launchPosition;
         approaching.Add(this);
     }
 
     private void Update()
     {
         if (!isFlying) return;
-        Vector3 previousPosition = transform.position;
         elapsedFlightTime += Time.deltaTime;
         if (elapsedFlightTime < flightDuration)
         {
@@ -92,15 +128,15 @@ public class Projectile : MonoBehaviour
         var player = Camera.main;
         if (player != null)
         {
-            Vector3 playerPosition = player.transform.position;
-            if (!passedPlayer && transform.position.z <= playerPosition.z)
+            eyesSeen = player.transform.position;
+            if (!passedPlayer && transform.position.z <= eyesSeen.z)
             {
                 passedPlayer = true;
                 approaching.Remove(this);
-                CheckHit(previousPosition, transform.position, player);
+                CheckHit(player);
                 if (!isFlying) return;
             }
-            if (passedPlayer && transform.position.z < playerPosition.z - flyByDistance)
+            if (passedPlayer && transform.position.z < eyesSeen.z - flyByDistance)
             {
                 Finish();
                 return;
@@ -117,50 +153,86 @@ public class Projectile : MonoBehaviour
     // within closeDistance of the eyes, wherever it left the frame: a shot from the street side runs near the
     // frame edge and leaves it early even when it nearly grazes the face. The frame is the same in landscape
     // and portrait (dodgeFrame), so a wide landscape screen does not make dodging harder.
-    private void CheckHit(Vector3 from, Vector3 to, Camera view)
+    private void CheckHit(Camera view)
     {
-        // Measure the miss distance where the bullet crossed the player's Z plane.
-        Vector3 playerPosition = view.transform.position;
-        float span = from.z - to.z;
-        float t = span > 0f ? Mathf.Clamp01((from.z - playerPosition.z) / span) : 1f;
-        Vector3 crossing = Vector3.Lerp(from, to, t);
-        Vector2 miss = new Vector2(crossing.x - playerPosition.x, crossing.y - playerPosition.y);
-        float missDistance = miss.magnitude;
-        if (missDistance <= hitRadius && InFrameAtEyes(crossing, view))
+        if (!Meet(view, out _, out Vector3 crossing, out float missDistance, out bool inFrame))
         {
+            // The player outran a bullet slower than him; it never met his eyes.
+            PassedPlayer?.Invoke(this, false);
+            GameSession.ReportDodge(false);
+            return;
+        }
+        if (missDistance <= hitRadius && inFrame)
+        {
+            HitPlayer?.Invoke(this);
             // The killing bullet and its rings vanish: the death screen shows who fired it instead.
             ShotEffects.ClearRings(rings.Owner);
             var shooter = FindShooter();
             GameSession.ReportPlayerHit(crossing, shooter != null ? shooter.transform : null);
             Finish();
         }
-        else if (GameSession.ReportDodge(missDistance <= closeDistance))
+        else if (Passed(missDistance <= closeDistance))
         {
             // A close one: the player fires back at whoever sent this bullet.
             CounterShot.Fire(FindShooter());
         }
     }
 
-    // Whether the bullet was still in the frame at the camera's near plane on its way in, i.e. right up to the
-    // eyes. Its position there is traced back from the crossing against the camera's own run forward, so the
-    // answer does not depend on frame rate.
-    private bool InFrameAtEyes(Vector3 crossing, Camera view)
+    // A dodge: the fly-by hook, then the count; true for a close one the player answers.
+    private bool Passed(bool close)
     {
-        Transform eyes = view.transform;
-        float cameraSpeed = view.TryGetComponent<CameraMovement>(out var movement) ? movement.Speed : 0f;
-        Vector3 approach = velocity - Vector3.forward * cameraSpeed;
-        float closing = -Vector3.Dot(approach, eyes.forward);
+        PassedPlayer?.Invoke(this, close);
+        return GameSession.ReportDodge(close);
+    }
+
+    // Where this bullet crosses the plane of the eyes, seen from the running player: on the line through where
+    // the bullet and the eyes both were at its last move, at its speed relative to him. Exact at any frame rate,
+    // and the same sums for the real crossing and for a prediction. Gives the game seconds until the crossing
+    // (negative once past it), the crossing point, the miss there and whether the bullet is in the frame there.
+    private bool Meet(Camera view, out float seconds, out Vector3 crossing, out float missDistance, out bool inFrame)
+    {
+        Vector3 approach = velocity - Vector3.forward * CameraSpeed(view);
+        seconds = float.PositiveInfinity;
+        crossing = transform.position;
+        missDistance = float.PositiveInfinity;
+        inFrame = false;
+        if (approach.z >= 0f) return false;
+        seconds = (transform.position.z - eyesSeen.z) / -approach.z;
+        crossing = transform.position + approach * seconds;
+        missDistance = new Vector2(crossing.x - eyesSeen.x, crossing.y - eyesSeen.y).magnitude;
+        inFrame = InFrameAtEyes(crossing - eyesSeen, approach, view);
+        return true;
+    }
+
+    // Whether the bullet was still in the frame at the camera's near plane on its way in, i.e. right up to the
+    // eyes; crossing is relative to the eyes. It counts as in the frame while any of its drawn size is inside.
+    private bool InFrameAtEyes(Vector3 crossing, Vector3 approach, Camera view)
+    {
+        Quaternion eyes = view.transform.rotation;
+        float closing = -Vector3.Dot(approach, eyes * Vector3.forward);
         if (closing <= 0f) return false;
         float depth = view.nearClipPlane;
-        Vector3 local = eyes.InverseTransformPoint(crossing - approach / closing * depth);
+        Vector3 local = Quaternion.Inverse(eyes) * (crossing - approach / closing * depth);
         float tanVertical = Mathf.Tan(view.fieldOfView * 0.5f * Mathf.Deg2Rad);
         float tanHorizontal = Mathf.Min(tanVertical * view.aspect, Mathf.Tan(dodgeFrame.x * Mathf.Deg2Rad));
         tanVertical = Mathf.Min(tanVertical, Mathf.Tan(dodgeFrame.y * Mathf.Deg2Rad));
-        // The bullet counts as in the frame while any of its drawn size is inside it.
-        var body = GetComponentInChildren<Renderer>();
-        float radius = body != null ? Mathf.Max(body.bounds.extents.x, body.bounds.extents.y) : 0f;
+        float radius = FullSizeRadius();
         return Mathf.Abs(local.x) - radius < depth * tanHorizontal && Mathf.Abs(local.y) - radius < depth * tanVertical;
     }
+
+    // Half the bullet's drawn size across the view once fully grown, as it is when it reaches the eyes.
+    private float FullSizeRadius()
+    {
+        if (body == null) body = GetComponentInChildren<Renderer>();
+        if (body == null) return 0f;
+        float growth = hasInitialScale && transform.localScale.x > 0f
+            ? Mathf.Max(1f, finalScaleMultiplier) * initialScale.x / transform.localScale.x
+            : 1f;
+        return Mathf.Max(body.bounds.extents.x, body.bounds.extents.y) * growth;
+    }
+
+    private static float CameraSpeed(Camera view) =>
+        view.TryGetComponent<CameraMovement>(out var movement) ? movement.Speed : 0f;
 
     // The bullet's pool lives on the enemy that fired it; the gun nearest the launch point is the fallback.
     private EnemyGunman FindShooter()

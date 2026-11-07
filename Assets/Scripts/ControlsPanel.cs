@@ -19,6 +19,7 @@ public sealed class ControlsPanel : MonoBehaviour
 
     private bool open;
     private Rect menuRect;
+    private Rect timeRect;
     private Rect verticalRect;
     private Rect orientationRect;
     private GUIStyle style;
@@ -43,7 +44,7 @@ public sealed class ControlsPanel : MonoBehaviour
         instance = host.AddComponent<ControlsPanel>();
     }
 
-    private enum Hit { None, Menu, VerticalDodge, Orientation }
+    private enum Hit { None, Menu, TimeControl, VerticalDodge, Orientation }
 
     private void Update()
     {
@@ -52,6 +53,11 @@ public sealed class ControlsPanel : MonoBehaviour
         switch (HitTest(pointer.position.ReadValue()))
         {
             case Hit.Menu: open = !open; break;
+            case Hit.TimeControl:
+                ControlOptions.TimeControl = ControlOptions.TimeControl == ControlOptions.TimeControlMode.Tilt
+                    ? ControlOptions.TimeControlMode.Danger
+                    : ControlOptions.TimeControlMode.Tilt;
+                break;
             case Hit.VerticalDodge: ControlOptions.VerticalDodge = !ControlOptions.VerticalDodge; break;
             case Hit.Orientation: ControlOptions.Portrait = !ControlOptions.Portrait; break;
         }
@@ -80,6 +86,7 @@ public sealed class ControlsPanel : MonoBehaviour
         Layout();
         DrawButton(menuRect, "CONTROLS");
         if (!open) return;
+        DrawButton(timeRect, "TIME: " + (ControlOptions.TimeControl == ControlOptions.TimeControlMode.Tilt ? "TILT" : "DANGER"));
         DrawButton(verticalRect, "DUCK / RISE: " + (ControlOptions.VerticalDodge ? "ON" : "OFF"));
         DrawButton(orientationRect, "SCREEN: " + (ControlOptions.Portrait ? "PORTRAIT" : "LANDSCAPE"));
     }
@@ -96,6 +103,7 @@ public sealed class ControlsPanel : MonoBehaviour
         var point = new Vector2(pointerPosition.x, Screen.height - pointerPosition.y);
         if (menuRect.Contains(point)) return Hit.Menu;
         if (!open) return Hit.None;
+        if (timeRect.Contains(point)) return Hit.TimeControl;
         if (verticalRect.Contains(point)) return Hit.VerticalDodge;
         if (orientationRect.Contains(point)) return Hit.Orientation;
         return Hit.None;
@@ -111,8 +119,9 @@ public sealed class ControlsPanel : MonoBehaviour
         float height = ButtonHeight * scale;
         float step = height + Gap * scale;
         menuRect = new Rect(right - width, top, width, height);
-        verticalRect = new Rect(right - width, top + step, width, height);
-        orientationRect = new Rect(right - width, top + step * 2f, width, height);
+        timeRect = new Rect(right - width, top + step, width, height);
+        verticalRect = new Rect(right - width, top + step * 2f, width, height);
+        orientationRect = new Rect(right - width, top + step * 3f, width, height);
     }
 
     private void DrawButton(Rect rect, string label)
