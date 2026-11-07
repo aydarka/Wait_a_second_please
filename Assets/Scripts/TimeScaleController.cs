@@ -30,10 +30,14 @@ public sealed class TimeScaleController : MonoBehaviour
     [Header("Danger time control")]
     [SerializeField, Tooltip("Time scale at the most dangerous moment (a bullet about to hit), by metres run. It rises so later shots leave less time to react; 1000 m is about three minutes of running.")]
     private AnimationCurve peakTimeScaleByDistance = new AnimationCurve(new Keyframe(0f, 0.05f), new Keyframe(1000f, 0.3f));
-    [SerializeField, Range(0f, 1f), Tooltip("Danger of an enemy at the moment it fires; it grows from 0 while the enemy aims, and the bullet carries on from there.")]
-    private float aimDanger = 0.5f;
-    [SerializeField, Min(0.01f), Tooltip("Game seconds before a bullet reaches the eyes from which its danger climbs from Aim Danger to full.")]
-    private float dangerHorizon = 0.4f;
+    [SerializeField, Range(0f, 1f), Tooltip("Danger of an enemy at the moment it fires: only a light slow-down that grows while it aims. The bullet carries on from there, and its approach does the rest.")]
+    private float aimSlowDown = 0.15f;
+    [SerializeField, Min(0f), Tooltip("A bullet starts slowing time beyond Aim Slow Down once it is this close to the eyes, in metres.")]
+    private float slowDownStartDistance = 25f;
+    [SerializeField, Min(0f), Tooltip("A bullet this close to the eyes, in metres, gives the full slow-down.")]
+    private float deepestSlowDownDistance = 1f;
+    [SerializeField, Min(0.01f), Tooltip("Shapes the approach: above 1 keeps most of the slow-down for the last metres, so the bullet rushes in and then nearly stops in front of the face.")]
+    private float approachExponent = 2f;
     [SerializeField, Min(0f), Tooltip("A bullet that will pass the eyes closer than this, in metres, keeps the full slow-down even once it is dodged, so it flies slowly past the ear.")]
     private float nearPassDistance = 1f;
     [SerializeField, Min(0f), Tooltip("A bullet that will pass the eyes farther than this, in metres, does not slow time; between the two the slow-down fades.")]
@@ -271,7 +275,7 @@ public sealed class TimeScaleController : MonoBehaviour
         float highest = 0f;
         aimingEnemies.RemoveWhere(stoppedAiming);
         foreach (var enemy in aimingEnemies)
-            highest = Mathf.Max(highest, aimDanger * Mathf.Clamp01(enemy.AimProgress));
+            highest = Mathf.Max(highest, aimSlowDown * Mathf.Clamp01(enemy.AimProgress));
 
         var swap = previousBulletDanger;
         previousBulletDanger = bulletDanger;
@@ -282,13 +286,16 @@ public sealed class TimeScaleController : MonoBehaviour
         {
             foreach (var bullet in Projectile.Approaching)
             {
-                if (bullet == null || !bullet.PredictMeeting(view, out float secondsToEyes, out float missDistance, out _))
+                if (bullet == null || !bullet.PredictMeeting(view, out _, out float missDistance, out _))
                     continue;
                 // Only how close the bullet will pass counts, not whether it would hit: a dodged bullet still flies slowly
                 // past the ear. One that will pass far away does not slow time.
                 float threat = 1f - Mathf.InverseLerp(nearPassDistance, Mathf.Max(nearPassDistance + 0.01f, farPassDistance), missDistance);
-                float closeness = 1f - Mathf.Clamp01(secondsToEyes / Mathf.Max(0.01f, dangerHorizon));
-                float bulletLevel = threat * Mathf.Lerp(aimDanger, 1f, closeness);
+                // The slow-down follows the bullet's approach, not the moment it was fired, and deepens most in the last metres.
+                float distance = Vector3.Distance(bullet.transform.position, view.transform.position);
+                float closeness = 1f - Mathf.InverseLerp(deepestSlowDownDistance,
+                    Mathf.Max(deepestSlowDownDistance + 0.01f, slowDownStartDistance), distance);
+                float bulletLevel = threat * Mathf.Lerp(aimSlowDown, 1f, Mathf.Pow(closeness, Mathf.Max(0.01f, approachExponent)));
                 bulletDanger[bullet] = bulletLevel;
                 highest = Mathf.Max(highest, bulletLevel);
             }
@@ -343,7 +350,8 @@ public sealed class TimeScaleController : MonoBehaviour
         fullSpeedTiltRate = Mathf.Max(tiltDeadZone + 0.01f, fullSpeedTiltRate);
         transitionDuration = Mathf.Max(0f, transitionDuration);
         slowDownDuration = Mathf.Max(0f, slowDownDuration);
-        dangerHorizon = Mathf.Max(0.01f, dangerHorizon);
+        slowDownStartDistance = Mathf.Max(0f, slowDownStartDistance);
+        deepestSlowDownDistance = Mathf.Clamp(deepestSlowDownDistance, 0f, slowDownStartDistance);
         nearPassDistance = Mathf.Max(0f, nearPassDistance);
         farPassDistance = Mathf.Max(nearPassDistance + 0.01f, farPassDistance);
         passHoldSeconds = Mathf.Max(0f, passHoldSeconds);
