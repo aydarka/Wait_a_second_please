@@ -41,7 +41,7 @@ public sealed class EnemySpawner : MonoBehaviour
     private float spotWindow = 10f;
     [SerializeField, Min(0f)] private float initialDelay = 10f;
 
-    [Header("Pace: values blend between stages by the distance run")]
+    [Header("Pace: values blend between stages by the distance run (stage distances × pace stretch)")]
     [SerializeField] private Stage[] stages =
     {
         new Stage { Distance = 0f, Interval = new Vector2(3.5f, 4.5f), PairChance = 0f, Shooters = 1,
@@ -53,6 +53,9 @@ public sealed class EnemySpawner : MonoBehaviour
         new Stage { Distance = 250f, Interval = new Vector2(1.4f, 2f), PairChance = 0.45f, Shooters = 3,
             HiddenTime = new Vector2(0.3f, 0.6f), EngageDistance = 44f },
     };
+    [SerializeField, Min(0.01f), Tooltip("Multiplies every stage distance: one knob to stretch or compress the whole curve. " +
+        "4 puts the peak at 1000 m, on the same scale as the slow-down in the time controller's danger mode.")]
+    private float paceStretch = 4f;
     [SerializeField, Min(0f), Tooltip("A breather comes every this many metres; 0 turns breathers off.")]
     private float breatherEvery = 80f;
     [SerializeField, Min(0f), Tooltip("No new enemies for this long, game seconds.")]
@@ -120,6 +123,7 @@ public sealed class EnemySpawner : MonoBehaviour
 
     private Stage StageAt(float run)
     {
+        run /= Mathf.Max(0.01f, paceStretch);
         if (run <= stages[0].Distance || stages.Length == 1) return stages[0];
         for (int i = 1; i < stages.Length; i++)
         {
@@ -214,6 +218,7 @@ public sealed class EnemySpawner : MonoBehaviour
         spawnDistance = Mathf.Max(0.01f, spawnDistance);
         spotWindow = Mathf.Max(0f, spotWindow);
         initialDelay = Mathf.Max(0f, initialDelay);
+        paceStretch = Mathf.Max(0.01f, paceStretch);
         groundOffset.x = Mathf.Max(0f, groundOffset.x);
         groundOffset.y = Mathf.Max(groundOffset.x, groundOffset.y);
         ledgeOffset = Mathf.Max(0f, ledgeOffset);

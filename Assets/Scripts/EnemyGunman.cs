@@ -47,6 +47,9 @@ public sealed class EnemyGunman : MonoBehaviour
     private float exposedMuzzleHeight = 1.3f;
     [SerializeField, Tooltip("Colliders that stop bullets. Empty uses the StreetCover layer when it exists.")]
     private LayerMask lineOfFireBlockers;
+    [SerializeField, Min(0f), Tooltip("Before showing itself, the line of fire must also be clear from this much lower, metres. " +
+        "The gun levelled at the eyes sits a little lower than predicted, and a line that skims a car roof gets cut once the enemy is out.")]
+    private float lineOfFireClearance = 0.2f;
 
     [Header("Engagement")]
     [SerializeField, Min(0f), Tooltip("Starts showing itself once the player is this close, metres.")]
@@ -106,6 +109,10 @@ public sealed class EnemyGunman : MonoBehaviour
     private Quaternion idleUpperArmRotation;
     private Quaternion idleForearmRotation;
     private Quaternion spineRotation;
+    // Bullet speed along Z, for predicting where it meets the player; 0 when the gun's pool is not found.
+    private float bulletSpeed;
+    // The muzzle relative to the feet in the aiming pose, in the enemy's facing: for line checks before it shows.
+    private Vector3 aimMuzzleOffset;
     private bool configurationValid;
 
     private bool hasPlacement;
@@ -247,6 +254,10 @@ public sealed class EnemyGunman : MonoBehaviour
             return;
         }
         if (lineOfFireBlockers.value == 0) lineOfFireBlockers = LayerMask.GetMask(DefaultBlockerLayer);
+        // The gun's bullet pool sits next to it on the enemy.
+        var bulletPool = gun.GetComponent<PrefabPool>();
+        var bullet = bulletPool != null && bulletPool.Prefab != null ? bulletPool.Prefab.GetComponent<Projectile>() : null;
+        bulletSpeed = bullet != null ? bullet.ZSpeed : 0f;
         CollectBodyRenderers();
         CapturePoses();
         body.Capture(transform);
@@ -271,6 +282,7 @@ public sealed class EnemyGunman : MonoBehaviour
     // The prefab is posed aiming; the waiting pose turns the gun and the free arm away from it.
     private void CapturePoses()
     {
+        aimMuzzleOffset = Quaternion.Inverse(transform.rotation) * (muzzle.position - transform.position);
         spineRotation = spine.localRotation;
         aimHandRotation = gunHand.localRotation;
         aimUpperArmRotation = supportUpperArm.localRotation;
@@ -475,7 +487,42 @@ public sealed class EnemyGunman : MonoBehaviour
         if (toTarget.z >= 0f || distance > engageDistance || distance < minFireDistance) return false;
         var mainCamera = Camera.main;
         if (mainCamera == null) return false;
-        return StaysInFrame(mainCamera) && LineOfFireClear(shootFrom, target.position);
+        return StaysInFrame(mainCamera) && ShotLineClear();
+    }
+
+    // The player runs on while the enemy steps out and warns, and the bullet meets him further on still. As he
+    // comes closer the line of fire swings out, and a car or pier further down the pavement can cut it: the line
+    // must be clear when the warning starts, when the bullet leaves and on the bullet's own path to the meeting.
+    // A player who tilts behind cover in the meantime is another matter: that is cover saving him.
+    private bool ShotLineClear()
+    {
+        float speed = runner != null ? runner.Speed : 0f;
+        Vector3 atWarning = target.position + Vector3.forward * (speed * ExposeDuration);
+        Vector3 atShot = target.position + Vector3.forward * (speed * (ExposeDuration + aimDuration));
+        if (!LineClearWithMargin(MuzzleFacing(atWarning), atWarning)) return false;
+        Vector3 shootFrom = MuzzleFacing(atShot);
+        if (!LineClearWithMargin(shootFrom, atShot)) return false;
+        // Where the bullet meets the running player, as ProjectileSpawner leads it.
+        float zDistance = shootFrom.z - atShot.z;
+        if (bulletSpeed <= 0f || zDistance <= 0f) return true;
+        Vector3 meeting = atShot + Vector3.forward * (speed * zDistance / (bulletSpeed + speed));
+        return LineClearWithMargin(shootFrom, meeting);
+    }
+
+    private bool LineClearWithMargin(Vector3 from, Vector3 to)
+    {
+        return LineOfFireClear(from, to) && LineOfFireClear(from + Vector3.down * lineOfFireClearance, to);
+    }
+
+    // Where the muzzle will be when the enemy stands out of cover facing the viewer, gun levelled. The long
+    // barrel reaches about a metre forward of the body and a little to the gun side: from there the line of fire
+    // can graze a car that a line from the chest clears.
+    private Vector3 MuzzleFacing(Vector3 viewer)
+    {
+        Vector3 toViewer = viewer - exposedPosition;
+        toViewer.y = 0f;
+        Quaternion facing = toViewer.sqrMagnitude > 0.0001f ? Quaternion.LookRotation(toViewer) : transform.rotation;
+        return exposedPosition + facing * aimMuzzleOffset;
     }
 
     // The whole figure must be on screen when it steps out and still be there when it is back in cover,
