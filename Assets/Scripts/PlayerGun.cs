@@ -47,6 +47,8 @@ public sealed class PlayerGun : MonoBehaviour
     private bool hasAim;
 
     public bool IsUp => raised >= 1f;
+    // The gun's meshes, so the shoot-back moment can lift them out of the dark.
+    public Renderer[] Parts => parts;
     public Vector3 MuzzlePosition => muzzle != null ? muzzle.position : transform.position;
 
     // Starts drawing the gun at a point to aim at; it stays up while any holder keeps it.

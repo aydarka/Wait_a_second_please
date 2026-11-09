@@ -3,7 +3,8 @@ using UnityEngine;
 using UnityEngine.Rendering;
 
 // Shot visuals that are not part of a bullet: the Matrix-style rings a bullet leaves hanging in the air,
-// the red aim glint on a levelling gun, the yellow muzzle flash and the sparks where a bullet strikes cover.
+// the red aim glint on a levelling gun, the yellow muzzle flash, the sparks where a bullet strikes cover,
+// and the shoot-back moment: the world darkened, the enemy and the pistol white, a yellow ring on the enemy.
 // Created on first use, one per scene. Rings age in game time inside WaitASecond/ShotRings,
 // so once a ring is placed the CPU never touches it again.
 [DisallowMultipleComponent]
@@ -31,6 +32,13 @@ public sealed class ShotEffects : MonoBehaviour
     // A spark is drawn as the streak it would leave in this much time: long while fast, short at the top.
     private const float SparkStreakSeconds = 0.035f;
     private const float SparkFlashRadius = 0.15f;
+    // While the player may shoot back, the world darkens and the enemy and the pistol stand out white, a
+    // comic-book key moment; the dark comes and goes over this much real time. The card blends in linear
+    // colour, so 0.95 leaves white at about a fifth of its brightness to the eye, 0.8 at about half.
+    private const float FocusDim = 0.95f;
+    private const float FocusFadeSeconds = 0.15f;
+    // Drawn after the street, before bullets, rings and tells (3060, 3210), so the danger stays in view.
+    private const int FocusDimQueue = 3050;
 
     private static readonly int ShotTimeId = Shader.PropertyToID("_ShotTime");
     private static readonly Vector2[] Corners =
@@ -69,6 +77,15 @@ public sealed class ShotEffects : MonoBehaviour
             (Time.unscaledTime - BornReal) / SparkMinRealSeconds);
     }
 
+    // One counter-shot waiting for the player's tap: its enemy, and the yellow ring closing on the enemy.
+    private sealed class Focus
+    {
+        public EnemyGunman Enemy;
+        public Renderer[] EnemyParts;
+        public bool HasRing;
+        public float RingClosing;
+    }
+
     // The raise from the waiting pose reads as lowering the gun, so the glint waits until it is levelled.
     private sealed class AimGlint
     {
@@ -96,6 +113,15 @@ public sealed class ShotEffects : MonoBehaviour
     private readonly List<AimGlint> glints = new List<AimGlint>();
     private readonly List<Flash> flashes = new List<Flash>();
     private readonly List<SparkBurst> sparks = new List<SparkBurst>();
+    private readonly Dictionary<object, Focus> focuses = new Dictionary<object, Focus>();
+    private readonly Dictionary<Renderer, Material[]> whitened = new Dictionary<Renderer, Material[]>();
+    private readonly HashSet<Renderer> wantWhite = new HashSet<Renderer>();
+    private readonly List<Renderer> stopWhite = new List<Renderer>();
+    private Renderer[] focusGunParts;
+    private GameObject dimCard;
+    private Material dimMaterial;
+    private Material killerMaterial;
+    private float dimAmount;
     private EnemyGunman steppingShooter;
     private Color red = new Color(0.89f, 0.09f, 0.04f);
     private Color yellow = new Color(0.95f, 0.76f, 0.11f);
@@ -175,6 +201,29 @@ public sealed class ShotEffects : MonoBehaviour
         });
     }
 
+    // The player may shoot back at this enemy: the world darkens, the enemy and the pistol stand out white.
+    // Owner is the counter-shot; it ends the focus when it fires or the chance is gone.
+    public static void BeginFocus(object owner, EnemyGunman enemy, Renderer[] gunParts)
+    {
+        var effects = Current;
+        if (effects == null || owner == null || enemy == null) return;
+        effects.focuses[owner] = new Focus { Enemy = enemy, EnemyParts = enemy.GetComponentsInChildren<Renderer>() };
+        if (gunParts != null) effects.focusGunParts = gunParts;
+    }
+
+    // The yellow ring on the focused enemy's chest: closing runs from 0 when the chance opens to 1 when it is gone.
+    public static void TargetRing(object owner, float closing)
+    {
+        if (instance == null || owner == null || !instance.focuses.TryGetValue(owner, out var focus)) return;
+        focus.HasRing = true;
+        focus.RingClosing = closing;
+    }
+
+    public static void EndFocus(object owner)
+    {
+        if (instance != null && owner != null) instance.focuses.Remove(owner);
+    }
+
     // Sparks where a bullet struck cover; normal is the surface's, incoming the bullet's direction of flight.
     public static void CoverSparks(Vector3 position, Vector3 normal, Vector3 incoming)
     {
@@ -238,6 +287,7 @@ public sealed class ShotEffects : MonoBehaviour
         if (instance == this) instance = null;
         if (ringMesh != null) Destroy(ringMesh);
         if (inkMesh != null) Destroy(inkMesh);
+        if (dimMaterial != null) Destroy(dimMaterial);
     }
 
     private Mesh CreateLayer(string layerName, Material material)
@@ -295,6 +345,12 @@ public sealed class ShotEffects : MonoBehaviour
 
     private void ShowSpotlight(Transform shooter)
     {
+        // Death outranks every other tell: no aim marks, flashes, sparks or shoot-back focus on the death screen.
+        glints.Clear();
+        flashes.Clear();
+        sparks.Clear();
+        ClearFocus();
+
         var gunman = shooter.GetComponent<EnemyGunman>();
         if (gunman != null)
         {
@@ -312,23 +368,7 @@ public sealed class ShotEffects : MonoBehaviour
         }
 
         // A black card just past the near plane hides the world; it draws after everything else in the scene.
-        float distance = view.nearClipPlane * 1.5f;
-        float halfHeight = distance * Mathf.Tan(view.fieldOfView * 0.5f * Mathf.Deg2Rad) * 1.5f;
-        float halfWidth = halfHeight * view.aspect;
-        var card = new GameObject("Blackout", typeof(MeshFilter), typeof(MeshRenderer));
-        card.transform.SetParent(view.transform, false);
-        card.transform.localPosition = new Vector3(0f, 0f, distance);
-        var mesh = new Mesh { name = "Blackout" };
-        mesh.SetVertices(new List<Vector3>
-        {
-            new Vector3(-halfWidth, -halfHeight, 0f), new Vector3(halfWidth, -halfHeight, 0f),
-            new Vector3(halfWidth, halfHeight, 0f), new Vector3(-halfWidth, halfHeight, 0f)
-        });
-        mesh.SetTriangles(new[] { 0, 1, 2, 0, 2, 3 }, 0);
-        card.GetComponent<MeshFilter>().sharedMesh = mesh;
-        var cardRenderer = card.GetComponent<MeshRenderer>();
-        cardRenderer.sharedMaterial = blackout;
-        cardRenderer.shadowCastingMode = ShadowCastingMode.Off;
+        CreateCard(view, "Blackout", blackout);
 
         // The shooter is drawn once more over the card where it is not hidden behind cover.
         foreach (var part in shooter.GetComponentsInChildren<Renderer>())
@@ -361,8 +401,105 @@ public sealed class ShotEffects : MonoBehaviour
         }
         // Rings are stored in world space; the bounds just follow the camera so they are never culled.
         ringMesh.bounds = new Bounds(focus, Vector3.one * BoundsSize);
+        UpdateFocus(view);
         BuildTells(view);
         inkMesh.bounds = new Bounds(focus, Vector3.one * BoundsSize);
+    }
+
+    // The dark comes in while any counter-shot waits for the tap and goes once none does; the enemy and the
+    // pistol stay white while it is dark. Fades run on real time, as the moment itself is held slow.
+    private void UpdateFocus(Camera view)
+    {
+        float target = focuses.Count > 0 ? FocusDim : 0f;
+        dimAmount = Mathf.MoveTowards(dimAmount, target, Time.unscaledDeltaTime * FocusDim / FocusFadeSeconds);
+        if (dimAmount > 0f && view != null && EnsureDimCard(view))
+        {
+            dimCard.SetActive(true);
+            dimMaterial.SetColor("_Color", new Color(0f, 0f, 0f, dimAmount));
+        }
+        else if (dimCard != null)
+        {
+            dimCard.SetActive(false);
+        }
+
+        // Figures stay white until the dark has gone, so they do not drop back into the world mid-fade.
+        if (focuses.Count == 0 && dimAmount > 0f) return;
+        wantWhite.Clear();
+        foreach (var entry in focuses.Values)
+        {
+            if (entry.Enemy == null || entry.EnemyParts == null) continue;
+            foreach (var part in entry.EnemyParts) if (part != null) wantWhite.Add(part);
+        }
+        if (focuses.Count > 0 && focusGunParts != null)
+            foreach (var part in focusGunParts) if (part != null) wantWhite.Add(part);
+        foreach (var part in wantWhite) Whiten(part);
+        stopWhite.Clear();
+        foreach (var part in whitened.Keys) if (!wantWhite.Contains(part)) stopWhite.Add(part);
+        foreach (var part in stopWhite) Unwhiten(part);
+    }
+
+    // A flat card covering the view just past the near plane; its material decides when it draws and how dark.
+    private static GameObject CreateCard(Camera view, string cardName, Material material)
+    {
+        float distance = view.nearClipPlane * 1.5f;
+        float halfHeight = distance * Mathf.Tan(view.fieldOfView * 0.5f * Mathf.Deg2Rad) * 1.5f;
+        float halfWidth = halfHeight * Mathf.Max(1f, view.aspect);
+        var card = new GameObject(cardName, typeof(MeshFilter), typeof(MeshRenderer));
+        card.transform.SetParent(view.transform, false);
+        card.transform.localPosition = new Vector3(0f, 0f, distance);
+        var mesh = new Mesh { name = cardName };
+        mesh.SetVertices(new List<Vector3>
+        {
+            new Vector3(-halfWidth, -halfHeight, 0f), new Vector3(halfWidth, -halfHeight, 0f),
+            new Vector3(halfWidth, halfHeight, 0f), new Vector3(-halfWidth, halfHeight, 0f)
+        });
+        mesh.SetTriangles(new[] { 0, 1, 2, 0, 2, 3 }, 0);
+        card.GetComponent<MeshFilter>().sharedMesh = mesh;
+        var cardRenderer = card.GetComponent<MeshRenderer>();
+        cardRenderer.sharedMaterial = material;
+        cardRenderer.shadowCastingMode = ShadowCastingMode.Off;
+        cardRenderer.receiveShadows = false;
+        return card;
+    }
+
+    private bool EnsureDimCard(Camera view)
+    {
+        if (dimCard != null && dimCard.transform.parent == view.transform) return true;
+        if (dimCard != null) Destroy(dimCard);
+        var blackout = Resources.Load<Material>("ShotBlackout");
+        if (blackout == null) return false;
+        if (dimMaterial == null) dimMaterial = new Material(blackout) { renderQueue = FocusDimQueue };
+        dimCard = CreateCard(view, "Focus Dim", dimMaterial);
+        return true;
+    }
+
+    private void Whiten(Renderer part)
+    {
+        if (whitened.ContainsKey(part)) return;
+        if (killerMaterial == null) killerMaterial = Resources.Load<Material>("ShotKiller");
+        if (killerMaterial == null) return;
+        var original = part.sharedMaterials;
+        var materials = new Material[original.Length + 1];
+        original.CopyTo(materials, 0);
+        materials[original.Length] = killerMaterial;
+        part.sharedMaterials = materials;
+        whitened[part] = original;
+    }
+
+    private void Unwhiten(Renderer part)
+    {
+        if (part != null && whitened.TryGetValue(part, out var original)) part.sharedMaterials = original;
+        whitened.Remove(part);
+    }
+
+    private void ClearFocus()
+    {
+        focuses.Clear();
+        dimAmount = 0f;
+        if (dimCard != null) dimCard.SetActive(false);
+        stopWhite.Clear();
+        stopWhite.AddRange(whitened.Keys);
+        foreach (var part in stopWhite) Unwhiten(part);
     }
 
     private void BuildTells(Camera view)
@@ -399,6 +536,11 @@ public sealed class ShotEffects : MonoBehaviour
             }
             foreach (var flash in flashes) DrawFlash(view.transform, flash, pixelAtOneMetre);
             foreach (var burst in sparks) DrawSparks(view.transform, burst, pixelAtOneMetre);
+            foreach (var entry in focuses.Values)
+            {
+                if (entry.HasRing && entry.Enemy != null)
+                    AddTargetRing(view.transform, entry.Enemy.TargetPoint, entry.RingClosing, pixelAtOneMetre);
+            }
         }
         inkMesh.Clear();
         inkMesh.SetVertices(inkVertices);
@@ -435,6 +577,33 @@ public sealed class ShotEffects : MonoBehaviour
         float halfWidth = 1.25f * pixel;
         AddDisc(centre, view.right, view.up, dot, red);
         AddAnnulus(centre, view.right, view.up, ring - halfWidth, ring + halfWidth, red);
+    }
+
+    // Where the shoot-back ring on this chest is drawn and the radius it starts at, metres, so a prompt can
+    // stand beside it.
+    public static void TargetRingStart(Camera view, Vector3 chest, out Vector3 centre, out float startRadius)
+    {
+        float pixelAtOneMetre = 2f * Mathf.Tan(view.fieldOfView * 0.5f * Mathf.Deg2Rad) / ReferenceScreenHeight;
+        centre = TowardViewer(view.transform, chest, pixelAtOneMetre, out float pixel);
+        startRadius = TargetRingStartRadius(pixel);
+    }
+
+    // The ring starts about half a metre wide, but never under a few dozen pixels on a distant enemy.
+    private static float TargetRingStartRadius(float pixel) => Mathf.Max(0.55f, 34f * pixel);
+
+    // The player's answer to the enemy's red glint: a yellow ring closing on the enemy's chest while the player
+    // may shoot back, down to a dot as the chance runs out. Black-edged, so it reads on the white figure.
+    private void AddTargetRing(Transform view, Vector3 chest, float closing, float pixelAtOneMetre)
+    {
+        Vector3 centre = TowardViewer(view, chest, pixelAtOneMetre, out float pixel);
+        float edge = 1.5f * pixel;
+        float dot = Mathf.Max(0.035f, 3.5f * pixel);
+        float halfWidth = Mathf.Max(0.012f, 2f * pixel);
+        float ring = Mathf.Lerp(TargetRingStartRadius(pixel), dot * 1.8f + halfWidth, Mathf.Clamp01(closing));
+        AddAnnulus(centre, view.right, view.up, ring - halfWidth - edge, ring + halfWidth + edge, black);
+        AddAnnulus(centre, view.right, view.up, ring - halfWidth, ring + halfWidth, yellow);
+        AddDisc(centre, view.right, view.up, dot + edge, black);
+        AddDisc(centre, view.right, view.up, dot, yellow);
     }
 
     // A flat jagged star with a black edge; every shot gets its own rays.

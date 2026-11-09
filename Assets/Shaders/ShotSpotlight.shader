@@ -1,6 +1,7 @@
-// Death spotlight: one flat colour drawn late in the frame. As a black card with no depth test it hides
-// the world; drawn again over the shooter's own meshes with a depth test, it lifts only the shooter out
-// of the dark, cut wherever cover stands in front of him.
+// Spotlight: one flat colour drawn late in the frame. As a black card with no depth test it hides the world
+// (fully on the death screen, partly when the player may shoot back: the colour's alpha); drawn again over a
+// figure's own meshes with a depth test, it lifts only that figure out of the dark, cut wherever cover stands
+// in front of it.
 Shader "WaitASecond/ShotSpotlight"
 {
     Properties
@@ -20,6 +21,7 @@ Shader "WaitASecond/ShotSpotlight"
             Cull Off
             ZWrite Off
             ZTest [_ZTest]
+            Blend SrcAlpha OneMinusSrcAlpha
             // Pulled slightly forward so the copy over the shooter wins the depth test against his own surface.
             Offset -1, -1
 
@@ -40,7 +42,7 @@ Shader "WaitASecond/ShotSpotlight"
 
             half4 Frag() : SV_Target
             {
-                return half4(_Color.rgb, 1.0);
+                return _Color;
             }
             ENDHLSL
         }
