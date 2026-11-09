@@ -1,0 +1,146 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 128e6ff511b2e3c45817f867ac15229d, type: 3}
+  m_Name: SoundBank
+  m_EditorClassIdentifier: Assembly-CSharp::SoundBank
+  mixer: {fileID: 24100000, guid: c0445c8d93c5ff942ae5e3ca39ef7105, type: 2}
+  enemyShotNear:
+    clip: {fileID: 8300000, guid: 3eace6c9c6f13894a96719f04834e999, type: 3}
+    volume: 0.9
+    pitchSpread: 0.06
+  enemyShotFar:
+    clip: {fileID: 8300000, guid: acc456f791eecc34da7116799dc26f0b, type: 3}
+    volume: 0.9
+    pitchSpread: 0.06
+  farShotDistance: 24
+  enemyHit:
+    clip: {fileID: 8300000, guid: c6db2949166e4644384660110f8ac7e7, type: 3}
+    volume: 1
+    pitchSpread: 0.05
+  ricochetMetal:
+    clip: {fileID: 8300000, guid: 2ef9447c53882cb47a696613074cd930, type: 3}
+    volume: 0.8
+    pitchSpread: 0.12
+  ricochetConcrete:
+    clip: {fileID: 8300000, guid: e9e6832519a67a344a98b115068f1f47, type: 3}
+    volume: 0.8
+    pitchSpread: 0.12
+  bulletAir:
+    clip: {fileID: 8300000, guid: ea7265091f99d7546acadf7c61dda690, type: 3}
+    volume: 0.6
+    pitchSpread: 0.04
+  bulletPulse:
+    clip: {fileID: 8300000, guid: 58b294e0e5ebbd3488b21157ea37e5ae, type: 3}
+    volume: 0.8
+    pitchSpread: 0.05
+  nearAir:
+    clip: {fileID: 8300000, guid: ea8815e0ed069a54cb7518c65361feea, type: 3}
+    volume: 0.9
+    pitchSpread: 0
+  nearWhump:
+    clip: {fileID: 8300000, guid: 0558c055cca7b74429708ca30b1ba36d, type: 3}
+    volume: 1
+    pitchSpread: 0.05
+  gunDraw:
+    clip: {fileID: 8300000, guid: 560da406f77df3d4a82b97ea4d0b25da, type: 3}
+    volume: 0.5
+    pitchSpread: 0.04
+  gunHolster:
+    clip: {fileID: 8300000, guid: 901d958af56d42648975a46a51f557a2, type: 3}
+    volume: 0.35
+    pitchSpread: 0.04
+  pistolShot:
+    clip: {fileID: 8300000, guid: 77aad8f68c580bb40b6864d47933af45, type: 3}
+    volume: 0.85
+    pitchSpread: 0.04
+  earRing:
+    clip: {fileID: 8300000, guid: 711f9062c327fc8419894afd9e455e0c, type: 3}
+    volume: 0.18
+    pitchSpread: 0.02
+  slowMotionEnter:
+    clip: {fileID: 8300000, guid: 9e41c2beae635934482f2ce8ee8b0c3d, type: 3}
+    volume: 0.35
+    pitchSpread: 0.03
+  slowMotionExit:
+    clip: {fileID: 8300000, guid: c40c0ede7f07aa5489ac65b8c3664b4d, type: 3}
+    volume: 0.3
+    pitchSpread: 0.03
+  tapFocus:
+    clip: {fileID: 8300000, guid: d0d34ef2ba41dcf49bfa69076053b81c, type: 3}
+    volume: 0.6
+    pitchSpread: 0
+  clockTick:
+    clip: {fileID: 8300000, guid: 1580c8cbee3b4594eacc97853825a2c5, type: 3}
+    volume: 0.45
+    pitchSpread: 0.01
+  clockTock:
+    clip: {fileID: 8300000, guid: e96098e190b55484286003d55f210b3d, type: 3}
+    volume: 0.45
+    pitchSpread: 0.01
+  tapMiss:
+    clip: {fileID: 8300000, guid: 406e46b2b08f8c144825467c39db9366, type: 3}
+    volume: 0.5
+    pitchSpread: 0.03
+  hitNote:
+    clip: {fileID: 8300000, guid: b45fae0a134d92a47b9fa9ee5f23dbfe, type: 3}
+    volume: 0.5
+    pitchSpread: 0
+  deathImpact:
+    clip: {fileID: 8300000, guid: e0ccab2d4a9dac74a9750d11389e9697, type: 3}
+    volume: 1
+    pitchSpread: 0
+  deathSwell:
+    clip: {fileID: 8300000, guid: 05caff8501c3d8e4ca1bac775c017376, type: 3}
+    volume: 0.7
+    pitchSpread: 0
+  deathChord:
+    clip: {fileID: 8300000, guid: 7bd07efe93ef9bf44b726d27e434d195, type: 3}
+    volume: 0.6
+    pitchSpread: 0
+  slowMotionBed:
+    clip: {fileID: 8300000, guid: 54b988955eae1eb4fa050be73c24b5b2, type: 3}
+    volume: 0.35
+    pitchSpread: 0
+  heartbeat:
+    clip: {fileID: 8300000, guid: c598dbd2791eb5447bd04eebfaed5f0a, type: 3}
+    volume: 0.5
+    pitchSpread: 0
+  music:
+    clip: {fileID: 8300000, guid: 36a181c400dace943974a0a6f7181a31, type: 3}
+    volume: 0.45
+    pitchSpread: 0
+  deepestTimeScale: 0.05
+  deepestPitch: 0.5
+  worldCutoffAtDeepest: 1200
+  bulletCutoffAtDeepest: 4000
+  musicCutoffAtDeepest: 500
+  musicDuckAtDeepest: -8
+  heartbeatFromDepth: 0.45
+  slowMotionSoundCooldown: 1
+  closePassLeadMetres: 5
+  closePassMusicDuck: -6
+  closePassWorldDuck: -4
+  tapWindowMusicDuck: -15
+  tapWindowWorldDuck: -6
+  focusAttack: 0.12
+  focusRelease: 0.5
+  ringSpacing: 0.35
+  ringsPerPulse: 2
+  pulseRateFade: {x: 6, y: 14}
+  dopplerSoundSpeed: 300
+  dopplerPitchLimits: {x: 0.6, y: 1.6}
+  nearLeadMetres: 6
+  nearTail: 3
+  behindCutoff: 2500
+  clockInterval: {x: 0.5, y: 0.14}
+  tapeStopSeconds: 0.3
+  deathChordDelay: 0.35
