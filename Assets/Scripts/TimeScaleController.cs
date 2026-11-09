@@ -1,14 +1,13 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.InputSystem;
 
-// Two ways to run time, switched in ControlOptions.TimeControl:
-// Tilt: time barely moves while the device is still, follows how fast it is tilted, and runs normally while the screen
-// is held or while game code holds normal time (the player's counter-shot in flight, as in Superhot).
+// Two ways to run time, switched in ControlOptions.TimeControl. The tap never runs time in either: it is for shooting.
+// Tilt: time barely moves while the device is still, follows how fast it is tilted, and runs normally while game code
+// holds normal time (the player's counter-shot in flight, as in Superhot).
 // Danger: time runs normally until a shot threatens the player and slows down the closer a bullet passing near the eyes
-// gets, staying slow while it flies past the ear; a sharp tilt wins back part of the slow-down, the tap leaves it alone,
-// and the slowest point grows less slow as the run goes on.
+// gets, staying slow while it flies past the ear; a sharp tilt wins back part of the slow-down, and the slowest point
+// grows less slow as the run goes on.
 // In both modes game code can hold slow motion (HoldSlowMotion), and SlowMotionEntered/Exited mark the edges for sounds.
 [DisallowMultipleComponent]
 public sealed class TimeScaleController : MonoBehaviour
@@ -29,7 +28,7 @@ public sealed class TimeScaleController : MonoBehaviour
 
     [Header("Danger time control")]
     [SerializeField, Tooltip("Time scale at the most dangerous moment (a bullet about to hit), by metres run. It rises so later shots leave less time to react; 1000 m is about three minutes of running.")]
-    private AnimationCurve peakTimeScaleByDistance = new AnimationCurve(new Keyframe(0f, 0.05f), new Keyframe(1000f, 0.3f));
+    private AnimationCurve peakTimeScaleByDistance = new AnimationCurve(new Keyframe(0f, 0.02f), new Keyframe(1000f, 0.3f));
     [SerializeField, Range(0f, 1f), Tooltip("Danger of an enemy at the moment it fires: only a light slow-down that grows while it aims. The bullet carries on from there, and its approach does the rest.")]
     private float aimSlowDown = 0.15f;
     [SerializeField, Min(0f), Tooltip("A bullet starts slowing time beyond Aim Slow Down once it is this close to the eyes, in metres.")]
@@ -42,14 +41,14 @@ public sealed class TimeScaleController : MonoBehaviour
     private float nearPassDistance = 1f;
     [SerializeField, Min(0f), Tooltip("A bullet that will pass the eyes farther than this, in metres, does not slow time; between the two the slow-down fades.")]
     private float farPassDistance = 2f;
-    [SerializeField, Min(0f), Tooltip("Real-time seconds the slow-down stays after a bullet has passed the eyes, so it is seen and heard flying on behind the player.")]
+    [SerializeField, Min(0f), Tooltip("Real-time seconds the slow-down stays after a bullet has passed the eyes or struck cover, so it is seen and heard flying on behind the player, or its sparks are seen.")]
     private float passHoldSeconds = 0.35f;
     [SerializeField, Min(0f), Tooltip("Real-time seconds for a full drop from normal time to the slowest point.")]
     private float dangerSlowDownDuration = 0.12f;
     [SerializeField, Min(0f), Tooltip("Real-time seconds for time to return to normal once the danger is gone.")]
     private float dangerReleaseDuration = 0.3f;
     [SerializeField, Range(0f, 1f), Tooltip("Share of the way from the danger slow-down back to normal time that the sharpest tilt wins back (Superhot: moving fast lets the bullet come sooner). Without danger the tilt changes nothing.")]
-    private float maxTiltLift = 0.5f;
+    private float maxTiltLift = 0.25f;
     [SerializeField, Min(0f), Tooltip("Tilt speed in degrees per second that is ignored as hand tremor while in danger.")]
     private float dangerTiltDeadZone = 5f;
     [SerializeField, Min(0.01f), Tooltip("Tilt speed in degrees per second that wins back the full Max Tilt Lift.")]
@@ -79,11 +78,10 @@ public sealed class TimeScaleController : MonoBehaviour
     private bool slowMotionHeld;
     private float slowHoldFlow;
     private float slowHoldDanger;
-    // The parts of the last frame that do not come from the tilt: the tap or normal-time holds (Tilt) and the measured
-    // danger (Danger). A slow hold catches these, so the tilt keeps working on top of it.
+    // The parts of the last frame that do not come from the tilt: normal-time holds (Tilt) and the measured danger
+    // (Danger). A slow hold catches these, so the tilt keeps working on top of it.
     private float lastHeldFlow;
     private float lastMeasuredDanger;
-    private bool pressOnPanel;
     private ControlOptions.TimeControlMode activeMode;
     private EnemySpawner spawner;
     private float startZ;
@@ -99,7 +97,7 @@ public sealed class TimeScaleController : MonoBehaviour
     public static bool InSlowMotion { get; private set; }
 
     // Keeps time as slow as it is at the moment of the first hold, in both modes, until every requester releases it.
-    // A slow hold wins over normal-time holds, the tap and the tilt. For the counter-shot: the dodged bullet passes and
+    // A slow hold wins over normal-time holds; the tilt still wins back part of it. For the counter-shot: the dodged bullet passes and
     // the player draws and fires while time stays slow; time picks up again only after the release.
     // Holding twice is harmless; a destroyed Unity object releases itself; a scene reload clears every hold.
     public static void HoldSlowMotion(object requester)
@@ -113,7 +111,7 @@ public sealed class TimeScaleController : MonoBehaviour
         if (requester != null) slowMotionHolders.Remove(requester);
     }
 
-    // Tilt time control only: runs time at normal speed, like holding the screen, until the same requester releases it.
+    // Tilt time control only: runs time at normal speed until the same requester releases it.
     // Holding twice is harmless; a destroyed Unity object releases itself; a scene reload clears every hold.
     // Danger time control ignores holds: without danger time is normal anyway, and danger always wins.
     public static void HoldNormalTime(object requester)
@@ -210,24 +208,15 @@ public sealed class TimeScaleController : MonoBehaviour
     {
         float slowScale = Mathf.Max(0f, slowTimeScale);
         float normalScale = NormalScale;
-        var pointer = Pointer.current;
-        bool isHeld = false;
-        if (Application.isFocused && pointer != null)
-        {
-            // A press on the controls menu is a menu tap, not a request for normal time.
-            if (pointer.press.wasPressedThisFrame) pressOnPanel = ControlsPanel.Covers(pointer.position.ReadValue());
-            isHeld = pointer.press.isPressed && !pressOnPanel;
-        }
         // With the vertical dodge off, tilting the top edge does nothing, so it must not run time either.
         float tiltSpeed = ControlOptions.VerticalDodge ? TiltInput.AngularSpeed : TiltInput.RollSpeed;
-        isHeld |= normalTimeHolders.Count > 0;
 
         float tiltFlow = Mathf.Pow(
             Mathf.InverseLerp(tiltDeadZone, Mathf.Max(tiltDeadZone + 0.01f, fullSpeedTiltRate), tiltSpeed),
             Mathf.Max(0.01f, tiltResponseExponent));
-        float heldFlow = isHeld ? 1f : 0f;
+        float heldFlow = normalTimeHolders.Count > 0 ? 1f : 0f;
         lastHeldFlow = heldFlow;
-        // A slow hold stops the tap and normal-time holds from running time faster than when it began; the tilt still does.
+        // A slow hold stops normal-time holds from running time faster than when it began; the tilt still does.
         if (slowMotionHeld) heldFlow = Mathf.Min(heldFlow, slowHoldFlow);
         float targetFlow = Mathf.Max(heldFlow, tiltFlow);
 
@@ -301,7 +290,8 @@ public sealed class TimeScaleController : MonoBehaviour
             }
         }
 
-        // A bullet that dropped out since last frame has passed the eyes: keep its slow-down a moment longer.
+        // A bullet that dropped out since last frame has passed the eyes or struck cover: keep its slow-down a moment longer,
+        // so the bullet flying on or the sparks are seen before time picks up.
         float now = Time.unscaledTime;
         foreach (var entry in previousBulletDanger)
         {

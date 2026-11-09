@@ -447,6 +447,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PlayerTiltDodge
   maxRollAngle: 25
+  rollDeadZone: 2
   maxPitchAngle: 20
   maxSideOffset: 1.4
   maxDuckOffset: 0.9
@@ -454,6 +455,7 @@ MonoBehaviour:
   invertVertical: 0
   cameraRollFactor: 0.4
   responsiveness: 18
+  dodgeTimeShare: 1
 --- !u!1 &1277059556
 GameObject:
   m_ObjectHideFlags: 0
@@ -708,6 +710,43 @@ MonoBehaviour:
   tiltResponseExponent: 1.5
   transitionDuration: 0.08
   slowDownDuration: 0.35
+  peakTimeScaleByDistance:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0.02
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    - serializedVersion: 3
+      time: 1000
+      value: 0.3
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  aimSlowDown: 0.15
+  slowDownStartDistance: 25
+  deepestSlowDownDistance: 1
+  approachExponent: 2
+  nearPassDistance: 1
+  farPassDistance: 2
+  passHoldSeconds: 0.35
+  dangerSlowDownDuration: 0.12
+  dangerReleaseDuration: 0.3
+  maxTiltLift: 0.25
+  dangerTiltDeadZone: 5
+  dangerFullSpeedTiltRate: 60
+  dangerTiltResponseExponent: 1.5
 --- !u!4 &1735919853
 Transform:
   m_ObjectHideFlags: 0

@@ -2,6 +2,9 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 
 // Screen-relative device tilt shared by time control and dodging; sampled once per frame.
+// Roll (sideways) is measured from the horizon, so holding the phone level always reads as straight, whatever its pose
+// at the start. Pitch (towards or away) has no natural zero, people hold phones at very different angles, so it is
+// measured from the pose at the start of the run, and that neutral slowly follows the grip while nothing threatens.
 // Without a gravity sensor (Editor, desktop) the mouse position stands in for the tilt.
 public static class TiltInput
 {
@@ -10,23 +13,27 @@ public static class TiltInput
     private const float RateSmoothing = 20f;
     // Real-time seconds to wait after the screen turns before taking a new neutral pose.
     private const float OrientationSettleTime = 0.3f;
+    // Real-time seconds over which the pitch neutral follows the grip while time runs at normal speed.
+    private const float PitchNeutralFollowTime = 4f;
 
     private static int sampledFrame = -1;
-    private static bool sensorsRequested;
+    private static int gravitySensorTried = -1;
+    private static int accelerometerTried = -1;
     private static bool hasNeutral;
+    private static bool neutralFromSensor;
     private static bool hasPreviousDirection;
     private static Vector3 smoothedGravity;
     private static Vector3 previousDirection;
     private static float previousRoll;
-    private static Vector2 neutralAngles;
+    private static float neutralPitch;
     private static Vector2 angles;
     private static float angularSpeed;
     private static float rollSpeed;
     private static int screenShape;
     private static float settleUntil;
 
-    // x: roll, positive when the right edge goes down; y: pitch, positive when the top edge comes towards the player.
-    // Degrees from the pose captured by the first sample or by Recalibrate.
+    // x: roll from the horizon, positive when the right edge goes down.
+    // y: pitch, positive when the top edge comes towards the player, from the pose at the start of the run (or Recalibrate).
     public static Vector2 Angles
     {
         get { Sample(); return angles; }
@@ -44,6 +51,7 @@ public static class TiltInput
         get { Sample(); return rollSpeed; }
     }
 
+    // Takes the current pitch as the new neutral on the next sample. Roll needs no calibration.
     public static void Recalibrate()
     {
         hasNeutral = false;
@@ -54,7 +62,8 @@ public static class TiltInput
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
     private static void ResetStatics()
     {
-        sensorsRequested = false;
+        gravitySensorTried = -1;
+        accelerometerTried = -1;
         smoothedGravity = Vector3.zero;
         angularSpeed = 0f;
         rollSpeed = 0f;
@@ -93,19 +102,27 @@ public static class TiltInput
             return;
         }
 
+        // Switching between the mouse and the phone (Unity Remote connecting after Play starts) needs a fresh neutral.
+        if (hasNeutral && neutralFromSensor != fromSensor)
+        {
+            hasNeutral = false;
+            hasPreviousDirection = false;
+        }
+
         Vector2 currentAngles = ToAngles(direction);
-        // The cursor already has an absolute neutral (the screen centre); only a held device needs calibrating.
-        if (!fromSensor)
+        if (!hasNeutral)
         {
-            neutralAngles = Vector2.zero;
+            // The cursor already has an absolute neutral (the screen centre); a held device starts from its pose.
+            neutralPitch = fromSensor ? currentAngles.y : 0f;
+            neutralFromSensor = fromSensor;
             hasNeutral = true;
         }
-        else if (!hasNeutral)
+        else if (fromSensor && !TimeScaleController.InSlowMotion)
         {
-            neutralAngles = currentAngles;
-            hasNeutral = true;
+            // While nothing threatens, the neutral slowly follows how the phone is held; during a dodge it stays put.
+            neutralPitch = Mathf.LerpAngle(neutralPitch, currentAngles.y, 1f - Mathf.Exp(-deltaTime / PitchNeutralFollowTime));
         }
-        angles = new Vector2(currentAngles.x - neutralAngles.x, Mathf.DeltaAngle(neutralAngles.y, currentAngles.y));
+        angles = new Vector2(currentAngles.x, Mathf.DeltaAngle(neutralPitch, currentAngles.y));
 
         bool hasRate = hasPreviousDirection && deltaTime > 0f;
         float rate = hasRate ? Vector3.Angle(previousDirection, direction) / deltaTime : 0f;
@@ -119,22 +136,17 @@ public static class TiltInput
 
     private static bool TryReadGravity(float deltaTime, out Vector3 gravity)
     {
-        if (!sensorsRequested)
-        {
-            sensorsRequested = true;
-            if (GravitySensor.current != null) InputSystem.EnableDevice(GravitySensor.current);
-            else if (Accelerometer.current != null) InputSystem.EnableDevice(Accelerometer.current);
-        }
+        EnableSensorsAsTheyAppear();
 
         if (GravitySensor.current != null && GravitySensor.current.enabled)
         {
-            gravity = GravitySensor.current.gravity.ReadValue();
+            gravity = CompensateEditorOrientation(GravitySensor.current.gravity.ReadValue());
             if (gravity.sqrMagnitude > 0.01f) return true;
         }
         if (Accelerometer.current != null && Accelerometer.current.enabled)
         {
             // Raw acceleration includes hand shake; a low-pass filter leaves mostly gravity.
-            Vector3 acceleration = Accelerometer.current.acceleration.ReadValue();
+            Vector3 acceleration = CompensateEditorOrientation(Accelerometer.current.acceleration.ReadValue());
             smoothedGravity = smoothedGravity.sqrMagnitude > 0f
                 ? Vector3.Lerp(smoothedGravity, acceleration, 1f - Mathf.Exp(-AccelerometerSmoothing * deltaTime))
                 : acceleration;
@@ -143,6 +155,37 @@ public static class TiltInput
         }
         gravity = Vector3.zero;
         return false;
+    }
+
+    // Sensors start disabled, and Unity Remote adds them only after it connects (the gravity sensor even later, and
+    // disabled), so each one is asked to turn on once when it shows up. The accelerometer is only the fallback.
+    private static void EnableSensorsAsTheyAppear()
+    {
+        var gravitySensor = GravitySensor.current;
+        if (gravitySensor != null && !gravitySensor.enabled && gravitySensor.deviceId != gravitySensorTried)
+        {
+            gravitySensorTried = gravitySensor.deviceId;
+            InputSystem.EnableDevice(gravitySensor);
+        }
+        bool hasGravity = gravitySensor != null && gravitySensor.enabled;
+        var accelerometer = Accelerometer.current;
+        if (!hasGravity && accelerometer != null && !accelerometer.enabled && accelerometer.deviceId != accelerometerTried)
+        {
+            accelerometerTried = accelerometer.deviceId;
+            InputSystem.EnableDevice(accelerometer);
+        }
+    }
+
+    // In the Editor (Unity Remote) the Input System turns sensor axes by the Editor's screen orientation, which stays
+    // portrait however the phone is held. With a landscape Game View, turn them as a landscape-left device build would.
+    private static Vector3 CompensateEditorOrientation(Vector3 value)
+    {
+#if UNITY_EDITOR
+        if (InputSystem.settings.compensateForScreenOrientation
+            && Screen.orientation == ScreenOrientation.Portrait && Screen.width > Screen.height)
+            return Quaternion.Euler(0f, 0f, 90f) * value;
+#endif
+        return value;
     }
 
     private static bool TryReadMouse(out Vector3 direction)
