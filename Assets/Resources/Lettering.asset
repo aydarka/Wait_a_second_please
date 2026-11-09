@@ -1,0 +1,18 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 49006b7c152377b4bbe3d7bc294fbbc1, type: 3}
+  m_Name: Lettering
+  m_EditorClassIdentifier: Assembly-CSharp::Lettering
+  scream: {fileID: 11400000, guid: 06d0eea23c4ab5248a51502124024544, type: 2}
+  screamHeavy: {fileID: 2100000, guid: 0baea340c7962f34981ee6cd9f5bf06f, type: 2}
+  protocol: {fileID: 11400000, guid: 53015d2edd653e440bbdb9dc30b351a6, type: 2}
+  protocolMenuFont: {fileID: 12800000, guid: bfb498cca8418cf4b921753f2464b36a, type: 3}

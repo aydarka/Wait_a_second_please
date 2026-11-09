@@ -13,7 +13,8 @@ public sealed class ControlsPanel : MonoBehaviour
     private const float ButtonHeight = 38f;
     private const float Gap = 6f;
     private const float Outline = 1.5f;
-    private const int FontSize = 15;
+    // Courier Prime, the lettering's typewriter voice, is wider than the default font; 16.5 still fits.
+    private const float FontSize = 16.5f;
 
     private static ControlsPanel instance;
 
@@ -132,10 +133,13 @@ public sealed class ControlsPanel : MonoBehaviour
             black = new Texture2D(1, 1) { hideFlags = HideFlags.HideAndDontSave };
             black.SetPixel(0, 0, Color.black);
             black.Apply();
+            // The menu font is already bold; asking for bold again would thicken it artificially.
+            Font menuFont = Lettering.MenuFont;
             style = new GUIStyle
             {
+                font = menuFont,
                 alignment = TextAnchor.MiddleCenter,
-                fontStyle = FontStyle.Bold,
+                fontStyle = menuFont != null ? FontStyle.Normal : FontStyle.Bold,
                 normal = { textColor = Color.white },
             };
         }
